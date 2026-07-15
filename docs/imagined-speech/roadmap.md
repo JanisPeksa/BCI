@@ -92,8 +92,9 @@ produce deterministic, reconstructable session packages without EEG hardware.
 
 Add continuous raw acquisition without changing the protocol/UI contracts.
 
-- Define an `AcquisitionBackend` interface implemented by BrainFlow synthetic,
-  replay, and Cyton backends.
+- Define an `AcquisitionBackend` interface implemented by deterministic
+  in-process synthetic, BrainFlow synthetic/replay/Cyton, and LSL inlet
+  backends.
 - Run acquisition and writing outside the Qt UI thread.
 - Start recording before initial rest and stop only after final rest or
   controlled abort.
@@ -112,9 +113,9 @@ Add continuous raw acquisition without changing the protocol/UI contracts.
 - On UI or protocol failure, attempt to finalize raw recording and mark the
   package `failed`; never silently discard samples.
 
-**Complete when:** synthetic and replay runs save continuous EEG aligned with
-protocol events, followed by a short Cyton run demonstrating usable marker
-alignment.
+**Complete when:** in-process synthetic, BrainFlow synthetic, replay, and LSL
+runs save continuous EEG aligned with protocol events. A short Cyton marker
+alignment run remains the hardware acceptance gate when a board is available.
 
 ## Milestone 4 — Experimenter Workflow and Recovery
 

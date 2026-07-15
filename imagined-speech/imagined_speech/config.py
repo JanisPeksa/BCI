@@ -274,13 +274,15 @@ class ChannelConfig(StrictModel):
 class DeviceProfile(StrictModel):
     schema_version: Literal[1]
     profile_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    backend: Literal["synthetic", "replay", "cyton"]
-    board_id: int
+    backend: Literal["synthetic", "brainflow_synthetic", "replay", "cyton", "lsl"]
+    board_id: int | None = None
     sampling_rate_hz: float = Field(gt=0)
     eeg_channels: tuple[ChannelConfig, ...] = Field(min_length=1)
     reference: str = Field(min_length=1)
     ground: str = Field(min_length=1)
     connection: dict[str, str | int | float | bool | None] = {}
+    pre_roll_seconds: float = Field(default=1.0, ge=0)
+    post_roll_seconds: float = Field(default=1.0, ge=0)
 
     @model_validator(mode="after")
     def validate_channels(self) -> "DeviceProfile":
@@ -290,6 +292,12 @@ class DeviceProfile(StrictModel):
             raise ValueError("device board channels must be unique")
         if len(set(labels)) != len(labels):
             raise ValueError("device channel labels must be unique")
+        if self.backend in {"brainflow_synthetic", "cyton", "replay"} and self.board_id is None:
+            raise ValueError(f"{self.backend} device profile requires board_id")
+        if self.backend == "lsl" and not (
+            self.connection.get("stream_name") or self.connection.get("stream_type")
+        ):
+            raise ValueError("LSL device profile requires stream_name or stream_type")
         return self
 
 

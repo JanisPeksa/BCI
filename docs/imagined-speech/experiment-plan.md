@@ -31,7 +31,7 @@ The experimenter-facing display provides session setup, protocol preview, curren
 
 ## Hardware and montage
 
-OpenBCI Cyton is the primary device, with BrainFlow synthetic and replay support for development. Define a documented default 8-channel speech-relevant montage but make montage profiles configurable. Persist channel labels, electrode positions, reference, ground, sampling rate, hardware settings, and contact/impedance information when available for every session.
+OpenBCI Cyton is the primary device, with deterministic in-process synthetic data, BrainFlow synthetic/replay, and LSL EEG input support for development. Define a documented default 8-channel speech-relevant montage but make montage profiles configurable. Persist channel labels, electrode positions, reference, ground, sampling rate, hardware settings, and contact/impedance information when available for every session.
 
 ## QC pipeline
 

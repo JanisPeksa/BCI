@@ -47,7 +47,13 @@ def test_smoke_profile_is_hardware_and_asset_independent() -> None:
 
 @pytest.mark.parametrize(
     ("name", "backend"),
-    [("synthetic.yaml", "synthetic"), ("replay.yaml", "replay"), ("cyton.yaml", "cyton")],
+    [
+        ("synthetic.yaml", "synthetic"),
+        ("brainflow_synthetic.yaml", "brainflow_synthetic"),
+        ("replay.yaml", "replay"),
+        ("cyton.yaml", "cyton"),
+        ("lsl.yaml", "lsl"),
+    ],
 )
 def test_device_profiles_validate(name: str, backend: str) -> None:
     profile = load_device_profile(RESOURCE_ROOT / "devices" / name)

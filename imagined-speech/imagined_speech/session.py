@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import re
 import threading
@@ -53,6 +54,7 @@ class SessionValidationReport:
     event_count: int
     trial_count: int
     phase_count: int
+    sample_count: int = 0
     warnings: tuple[str, ...] = ()
 
 
@@ -66,6 +68,20 @@ def _write_bytes_atomic(path: Path, data: bytes) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(data)
     temporary.replace(path)
+
+
+def _redact_connection_secrets(device_data: dict[str, Any]) -> dict[str, Any]:
+    connection = device_data.get("connection")
+    if not isinstance(connection, dict):
+        return device_data
+    sensitive_fragments = ("password", "secret", "token", "api_key", "credential")
+    device_data["connection"] = {
+        key: "[REDACTED]"
+        if any(fragment in key.lower() for fragment in sensitive_fragments)
+        else value
+        for key, value in connection.items()
+    }
+    return device_data
 
 
 def _sha256(path: Path) -> str:
@@ -85,6 +101,8 @@ class SessionWriter(EventSink):
         plan: SessionPlan,
         participant_id: str,
         output_root: Path | None = None,
+        *,
+        auto_finalize: bool = True,
     ) -> None:
         if not PARTICIPANT_PATTERN.fullmatch(participant_id):
             raise ValueError(
@@ -109,6 +127,15 @@ class SessionWriter(EventSink):
 
         self._lock = threading.RLock()
         self._closed = False
+        self._auto_finalize = auto_finalize
+        self._artifacts = {
+            "manifest.json",
+            "experiment-config.yaml",
+            "device-profile.yaml",
+            "session-plan.json",
+            "events.jsonl",
+            "operator-actions.jsonl",
+        }
         self._event_path = self.path / "events.jsonl"
         self._action_path = self.path / "operator-actions.jsonl"
         self._event_file = self._event_path.open("a", encoding="utf-8", newline="\n")
@@ -119,7 +146,9 @@ class SessionWriter(EventSink):
 
     def _write_snapshots(self) -> None:
         config_data = self.resolved.config.model_dump(mode="json")
-        device_data = self.resolved.device.model_dump(mode="json")
+        device_data = _redact_connection_secrets(
+            self.resolved.device.model_dump(mode="json")
+        )
         (self.path / "experiment-config.yaml").write_text(
             yaml.safe_dump(config_data, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
@@ -145,18 +174,11 @@ class SessionWriter(EventSink):
             "config_hash": self.plan.config_hash,
             "status": status,
             "created_at_utc": self.created_at.isoformat(),
-            "artifacts": [
-                "manifest.json",
-                "experiment-config.yaml",
-                "device-profile.yaml",
-                "session-plan.json",
-                "events.jsonl",
-                "operator-actions.jsonl",
-            ],
+            "artifacts": sorted(self._artifacts),
         }
         if status != "in_progress":
             manifest["finalized_at_utc"] = datetime.now(UTC).isoformat()
-            manifest["artifacts"].append("checksums.sha256")
+            manifest["artifacts"] = sorted(self._artifacts | {"checksums.sha256"})
         return manifest
 
     def _write_manifest(self, status: str) -> None:
@@ -173,8 +195,26 @@ class SessionWriter(EventSink):
                 self._action_file.write(serialized)
                 self._action_file.flush()
             terminal_status = TERMINAL_EVENT_STATUS.get(event.event_type)
-            if terminal_status is not None:
+            if terminal_status is not None and self._auto_finalize:
                 self._finalize_locked(terminal_status)
+
+    def register_artifact(self, relative_name: str) -> None:
+        normalized = Path(relative_name)
+        if normalized.is_absolute() or ".." in normalized.parts:
+            raise ValueError("session artifact path must remain inside the package")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("cannot register an artifact after finalization")
+            if not (self.path / normalized).is_file():
+                raise ValueError(f"session artifact does not exist: {relative_name}")
+            self._artifacts.add(normalized.as_posix())
+
+    def finalize(self, status: str) -> None:
+        if status not in {"complete", "aborted", "failed", "incomplete"}:
+            raise ValueError(f"unsupported final session status: {status}")
+        with self._lock:
+            if not self._closed:
+                self._finalize_locked(status)
 
     def finalize_incomplete(self) -> None:
         with self._lock:
@@ -188,14 +228,7 @@ class SessionWriter(EventSink):
         self._action_file.close()
         self._write_manifest(status)
 
-        checksum_files = [
-            "manifest.json",
-            "experiment-config.yaml",
-            "device-profile.yaml",
-            "session-plan.json",
-            "events.jsonl",
-            "operator-actions.jsonl",
-        ]
+        checksum_files = sorted(self._artifacts)
         lines = [f"{_sha256(self.path / name)}  {name}" for name in checksum_files]
         (self.path / "checksums.sha256").write_text(
             "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
@@ -497,6 +530,7 @@ def validate_session(path: str | Path) -> SessionValidationReport:
         if event.session_id != manifest.get("session_id"):
             raise SessionValidationError("event references a different session ID")
     trial_count, phase_count = _validate_event_structure(events, plan, status)
+    sample_count = _validate_acquisition_artifacts(session_path, manifest, events)
     return SessionValidationReport(
         session_path=session_path,
         session_id=str(manifest["session_id"]),
@@ -504,5 +538,102 @@ def validate_session(path: str | Path) -> SessionValidationReport:
         event_count=len(events),
         trial_count=trial_count,
         phase_count=phase_count,
+        sample_count=sample_count,
         warnings=warnings,
     )
+
+
+def _validate_acquisition_artifacts(
+    session_path: Path, manifest: dict[str, Any], events: list[ProtocolEvent]
+) -> int:
+    acquisition_files = {
+        "eeg_raw.csv",
+        "acquisition-markers.jsonl",
+        "acquisition-health.jsonl",
+        "acquisition-metadata.json",
+    }
+    declared = set(manifest.get("artifacts", []))
+    present = {name for name in acquisition_files if (session_path / name).is_file()}
+    if not present and not (declared & acquisition_files):
+        return 0
+    if present != acquisition_files or not acquisition_files <= declared:
+        if manifest.get("status") not in {"failed", "incomplete", "in_progress"}:
+            raise SessionValidationError("acquisition artifact set is incomplete")
+        if not present <= declared:
+            raise SessionValidationError("acquisition artifacts are not declared in the manifest")
+        if "acquisition-metadata.json" in present:
+            metadata = _read_json(session_path / "acquisition-metadata.json")
+            return int(metadata.get("sample_count", 0)) if isinstance(metadata, dict) else 0
+        return 0
+
+    metadata = _read_json(session_path / "acquisition-metadata.json")
+    if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
+        raise SessionValidationError("acquisition metadata schema is unsupported")
+    channel_names = metadata.get("channel_names")
+    if not isinstance(channel_names, list) or not channel_names:
+        raise SessionValidationError("acquisition metadata has no channel catalog")
+
+    raw_path = session_path / "eeg_raw.csv"
+    try:
+        with raw_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            expected_header = [
+                "sample_index",
+                "receipt_monotonic_seconds",
+                "receipt_time_utc",
+                "source_timestamp",
+                "corrected_source_timestamp",
+                *channel_names,
+            ]
+            if header != expected_header:
+                raise SessionValidationError("raw EEG header does not match acquisition metadata")
+            row_count = 0
+            expected_width = len(expected_header)
+            for row_count, row in enumerate(reader, start=1):
+                if len(row) != expected_width:
+                    raise SessionValidationError(
+                        f"raw EEG row {row_count} has an unexpected column count"
+                    )
+                if int(row[0]) != row_count - 1:
+                    raise SessionValidationError("raw EEG sample indexes are discontinuous")
+    except OSError as exc:
+        raise SessionValidationError(f"cannot read eeg_raw.csv: {exc}") from exc
+    if row_count != metadata.get("sample_count"):
+        raise SessionValidationError("raw EEG sample count does not match metadata")
+    if manifest.get("status") == "complete" and row_count == 0:
+        raise SessionValidationError("complete acquired session contains no EEG samples")
+
+    events_by_sequence = {event.sequence_number: event for event in events}
+    marker_path = session_path / "acquisition-markers.jsonl"
+    try:
+        marker_lines = marker_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SessionValidationError(f"cannot read acquisition markers: {exc}") from exc
+    for line_number, line in enumerate(marker_lines, start=1):
+        try:
+            marker = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SessionValidationError(
+                f"invalid acquisition marker at line {line_number}"
+            ) from exc
+        event = events_by_sequence.get(marker.get("event_sequence"))
+        if event is None or event.marker_code != marker.get("marker_code"):
+            raise SessionValidationError("acquisition marker does not match protocol event")
+    if len(marker_lines) != len(events):
+        raise SessionValidationError("not every protocol event has an acquisition marker record")
+
+    try:
+        health_lines = (session_path / "acquisition-health.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    except OSError as exc:
+        raise SessionValidationError(f"cannot read acquisition health log: {exc}") from exc
+    for line_number, line in enumerate(health_lines, start=1):
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SessionValidationError(
+                f"invalid acquisition health log near line {line_number}"
+            ) from exc
+    return row_count

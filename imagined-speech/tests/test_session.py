@@ -1,8 +1,10 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 from imagined_speech.cli import default_config_path
 from imagined_speech.config import load_experiment
@@ -106,3 +108,20 @@ def test_valid_ids_in_the_wrong_phase_order_are_rejected(tmp_path: Path) -> None
 
     with pytest.raises(SessionValidationError, match="phase is out of plan order"):
         validate_session(writer.path)
+
+
+def test_device_connection_secrets_are_redacted(tmp_path: Path) -> None:
+    resolved = load_experiment(default_config_path())
+    device = resolved.device.model_copy(
+        update={"connection": {"serial_port": "COM4", "api_token": "do-not-save"}}
+    )
+    resolved = replace(resolved, device=device)
+    plan = compile_session_plan(resolved.config)
+    writer = SessionWriter(resolved, plan, "SECRET001", tmp_path)
+    writer.finalize_incomplete()
+
+    snapshot = yaml.safe_load(
+        (writer.path / "device-profile.yaml").read_text(encoding="utf-8")
+    )
+    assert snapshot["connection"]["serial_port"] == "COM4"
+    assert snapshot["connection"]["api_token"] == "[REDACTED]"

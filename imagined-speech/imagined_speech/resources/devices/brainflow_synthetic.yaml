@@ -1,7 +1,7 @@
 schema_version: 1
-profile_id: cyton_8ch
-backend: cyton
-board_id: 0
+profile_id: brainflow_synthetic_8ch
+backend: brainflow_synthetic
+board_id: -1
 sampling_rate_hz: 250
 eeg_channels:
   - {board_channel: 1, label: F3, position: F3}
@@ -12,9 +12,8 @@ eeg_channels:
   - {board_channel: 6, label: T8, position: T8}
   - {board_channel: 7, label: P3, position: P3}
   - {board_channel: 8, label: P4, position: P4}
-reference: Configurable linked mastoids or experiment-specific reference
-ground: Cyton BIAS
-connection:
-  serial_port: null
+reference: Synthetic BrainFlow metadata
+ground: Synthetic BrainFlow metadata
+connection: {}
 pre_roll_seconds: 1
 post_roll_seconds: 1

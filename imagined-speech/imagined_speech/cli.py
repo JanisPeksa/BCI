@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Sequence
 
 from imagined_speech.config import ConfigurationError, load_experiment
+from imagined_speech.acquisition import (
+    AcquisitionRecorder,
+    create_acquisition_backend,
+)
+from imagined_speech.acquisition.lsl_publisher import (
+    default_lsl_profile_path,
+    publish_synthetic_lsl,
+)
+from imagined_speech.config import load_device_profile
 from imagined_speech.engine import ProtocolEngine, RealClock, RunState, VirtualClock
+from imagined_speech.events import CompositeEventSink
 from imagined_speech.plan import compile_session_plan
 from imagined_speech.preview import render_preview
 from imagined_speech.session import (
@@ -60,6 +71,20 @@ def build_parser() -> argparse.ArgumentParser:
         "validate-session", help="validate and reconstruct a session package"
     )
     validate_package.add_argument("session", type=Path)
+
+    publisher = subparsers.add_parser(
+        "publish-lsl-synthetic",
+        help="publish a real-time synthetic EEG stream over LSL",
+    )
+    publisher.add_argument(
+        "--device-profile", type=Path, default=default_lsl_profile_path()
+    )
+    publisher.add_argument("--name", help="override the configured LSL stream name")
+    publisher.add_argument(
+        "--duration",
+        type=float,
+        help="stop after this many seconds (otherwise run until Ctrl+C)",
+    )
     return parser
 
 
@@ -80,22 +105,34 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _execute_session(args: argparse.Namespace, *, subject_ui: bool) -> int:
     resolved = load_experiment(args.config)
+    if args.clock == "virtual" and resolved.device.backend != "synthetic":
+        raise ValueError(
+            "virtual protocol time requires the in-process synthetic acquisition profile; "
+            "use --clock real for LSL, replay, or Cyton"
+        )
     plan = compile_session_plan(resolved.config)
+    clock = VirtualClock() if args.clock == "virtual" else RealClock()
     writer = SessionWriter(
         resolved,
         plan,
         participant_id=args.participant,
         output_root=args.output,
+        auto_finalize=False,
     )
-    clock = VirtualClock() if args.clock == "virtual" else RealClock()
+    backend = create_acquisition_backend(resolved, clock)
+    acquisition = AcquisitionRecorder(writer.path, backend, clock)
     engine = ProtocolEngine(
         writer.session_id,
         plan,
         resolved.config,
         clock,
-        writer,
+        CompositeEventSink(acquisition, writer),
     )
+    acquisition_started = False
     try:
+        acquisition.start()
+        acquisition_started = True
+        _recording_delay(resolved.device.pre_roll_seconds, clock, acquisition)
         if subject_ui:
             from imagined_speech.subject_ui import run_subject_window
 
@@ -111,6 +148,7 @@ def _execute_session(args: argparse.Namespace, *, subject_ui: bool) -> int:
         else:
             run_real(engine)
             exit_code = 0
+        _recording_delay(resolved.device.post_roll_seconds, clock, acquisition)
     except Exception as exc:
         if engine.state not in {RunState.COMPLETED, RunState.ABORTED, RunState.FAILED}:
             engine.fail(str(exc))
@@ -119,16 +157,40 @@ def _execute_session(args: argparse.Namespace, *, subject_ui: bool) -> int:
             traceback.print_exc()
         exit_code = 1
     finally:
-        writer.finalize_incomplete()
+        if acquisition_started:
+            acquisition.stop()
+        for artifact in acquisition.artifact_names:
+            if (writer.path / artifact).is_file():
+                writer.register_artifact(artifact)
+        status = {
+            RunState.COMPLETED: "complete",
+            RunState.ABORTED: "aborted",
+            RunState.FAILED: "failed",
+        }.get(engine.state, "incomplete")
+        writer.finalize(status)
 
     print(f"Session package: {writer.path}")
     if exit_code == 0:
         report = validate_session(writer.path)
         print(
             f"Session status: {report.status}; {report.event_count} events; "
-            f"{report.trial_count} completed trials"
+            f"{report.trial_count} completed trials; {report.sample_count} EEG samples"
         )
     return exit_code
+
+
+def _recording_delay(
+    seconds: float, clock: RealClock | VirtualClock, acquisition: AcquisitionRecorder
+) -> None:
+    if seconds <= 0:
+        return
+    if isinstance(clock, VirtualClock):
+        clock.advance(seconds)
+        acquisition.capture_available()
+        return
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        time.sleep(min(0.05, deadline - time.monotonic()))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -139,6 +201,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     args = parser.parse_args(arguments)
+    if args.command == "publish-lsl-synthetic":
+        try:
+            if args.duration is not None and args.duration <= 0:
+                raise ValueError("publisher duration must be positive")
+            profile = load_device_profile(args.device_profile)
+            print(
+                "Publishing synthetic LSL EEG; use Ctrl+C to stop...",
+                flush=True,
+            )
+            samples = publish_synthetic_lsl(
+                profile,
+                duration_seconds=args.duration,
+                stream_name=args.name,
+            )
+            print(f"Published {samples} samples")
+            return 0
+        except (ConfigurationError, ValueError, RuntimeError) as exc:
+            print(f"LSL publisher error: {exc}", file=sys.stderr)
+            return 2
     if args.command == "validate-session":
         try:
             report = validate_session(args.session)
@@ -148,7 +229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Valid session package: {report.session_path}")
         print(
             f"Status: {report.status}; events: {report.event_count}; "
-            f"completed trials: {report.trial_count}; completed phases: {report.phase_count}"
+            f"completed trials: {report.trial_count}; completed phases: {report.phase_count}; "
+            f"EEG samples: {report.sample_count}"
         )
         for warning in report.warnings:
             print(f"Warning: {warning}")
