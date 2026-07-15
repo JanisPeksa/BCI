@@ -1,1 +1,28 @@
-*/.venv/
+# Python
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# PyCharm
+.idea/
+*.iml
+
+# Build and tooling
+**/build/
+**/dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+imagined-speech/sessions/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
