@@ -61,11 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--clock", choices=("virtual", "real"), default="virtual"
     )
 
-    run = subparsers.add_parser("run", help="run the subject-facing Qt display")
+    run = subparsers.add_parser(
+        "run", help="launch the experimenter workflow and subject display"
+    )
     _add_run_arguments(run)
-    run.add_argument("--clock", choices=("real", "virtual"), default="real")
-    run.add_argument("--windowed", action="store_true", help="do not use full screen")
-    run.add_argument("--screen", type=int, help="override the configured screen index")
+
+    subject = subparsers.add_parser(
+        "run-subject", help="run only the subject-facing Qt display"
+    )
+    _add_run_arguments(subject)
+    subject.add_argument("--clock", choices=("real", "virtual"), default="real")
+    subject.add_argument("--windowed", action="store_true", help="do not use full screen")
+    subject.add_argument("--screen", type=int, help="override the configured screen index")
 
     validate_package = subparsers.add_parser(
         "validate-session", help="validate and reconstruct a session package"
@@ -96,6 +103,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="experiment YAML path (defaults to the bundled smoke profile)",
     )
     parser.add_argument("--participant", default="SIM001")
+    parser.add_argument("--session-label")
     parser.add_argument(
         "--output",
         type=Path,
@@ -118,6 +126,7 @@ def _execute_session(args: argparse.Namespace, *, subject_ui: bool) -> int:
         participant_id=args.participant,
         output_root=args.output,
         auto_finalize=False,
+        session_label=args.session_label,
     )
     backend = create_acquisition_backend(resolved, clock)
     acquisition = AcquisitionRecorder(writer.path, backend, clock)
@@ -217,7 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"Published {samples} samples")
             return 0
-        except (ConfigurationError, ValueError, RuntimeError) as exc:
+        except (ConfigurationError, ImportError, ValueError, RuntimeError) as exc:
             print(f"LSL publisher error: {exc}", file=sys.stderr)
             return 2
     if args.command == "validate-session":
@@ -235,11 +244,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         for warning in report.warnings:
             print(f"Warning: {warning}")
         return 0
+    if args.command == "run":
+        try:
+            from imagined_speech.experimenter_ui import run_experimenter_window
+
+            return run_experimenter_window(
+                args.config,
+                participant=args.participant,
+                output_root=args.output,
+                session_label=args.session_label,
+            )
+        except (ConfigurationError, ValueError, RuntimeError) as exc:
+            print(f"Experimenter UI error: {exc}", file=sys.stderr)
+            return 2
 
     try:
         if args.command == "simulate":
             return _execute_session(args, subject_ui=False)
-        if args.command == "run":
+        if args.command == "run-subject":
             return _execute_session(args, subject_ui=True)
         resolved = load_experiment(args.config)
     except (ConfigurationError, SessionValidationError, ValueError) as exc:

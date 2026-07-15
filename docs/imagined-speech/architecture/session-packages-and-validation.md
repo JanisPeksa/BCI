@@ -3,7 +3,8 @@
 ## Package as the persistence boundary
 
 Each run creates a new directory named with UTC creation time, participant ID,
-and a UUID prefix. The complete directory is the unit passed to validation and,
+an optional session label, and a UUID prefix. The complete directory is the
+unit passed to validation and,
 in future milestones, offline review and analysis.
 
 The package avoids a mutable database dependency and keeps scientific inputs,
@@ -20,7 +21,7 @@ checksums rather than rewriting scientific records.
 | `device-profile.yaml` | Validated device/montage snapshot with recognized secret fields redacted |
 | `session-plan.json` | Exact deterministic plan executed by the engine |
 | `events.jsonl` | Authoritative ordered semantic event timeline |
-| `operator-actions.jsonl` | Subset of pause/resume/abort/failure events |
+| `operator-actions.jsonl` | Accepted/rejected experimenter commands plus action-event audit copies |
 | `eeg_raw.csv` | Continuous source rows and timing columns |
 | `acquisition-markers.jsonl` | Per-event backend marker request/embedding audit |
 | `acquisition-health.jsonl` | Append-only acquisition lifecycle and error records |
@@ -28,9 +29,9 @@ checksums rather than rewriting scientific records.
 | `checksums.sha256` | SHA-256 of every declared artifact other than the checksum file itself |
 
 Acquisition files are registered only after the recorder has stopped. This is
-why the CLI constructs `SessionWriter` with `auto_finalize=False`: a terminal
-engine event must not finalize checksums before the recorder writes metadata
-and closes raw output.
+why the CLI and `SessionRuntime` construct `SessionWriter` with
+`auto_finalize=False`: a terminal engine event must not finalize checksums
+before the recorder writes metadata and closes raw output.
 
 ## Creation and finalization
 
@@ -40,9 +41,12 @@ directory, opens the two event logs, writes snapshots, and atomically writes an
 `in_progress` manifest.
 
 Each event is serialized and flushed immediately to `events.jsonl`. Action
-events are also appended to `operator-actions.jsonl`. Immediate flush favors
-recoverability and auditability over maximum event-write throughput; event
-volume is small compared with EEG data.
+events are also appended to `operator-actions.jsonl`. The runtime appends typed
+`OperatorCommandRecord`s to the same log for both accepted and rejected UI
+commands, including reason, source, before/after state, timestamps, note, and
+active-trial context. Immediate flush favors recoverability and auditability
+over maximum event-write throughput; event volume is small compared with EEG
+data.
 
 At finalization the writer:
 
@@ -93,18 +97,23 @@ fields must use recognizable names or extend the redaction policy.
    compare the manifest plan ID with the snapshot.
 6. Parse every event as `ProtocolEvent`, enforce sequence/session identity, and
    reconstruct plan structure.
-7. Validate acquisition artifacts, raw header/width/index/count, markers, and
+7. Parse the operator log, validate typed command sequence/session identity,
+   and ensure copied action events exist in the protocol timeline.
+8. Validate acquisition artifacts, raw header/width/index/count, markers, and
    health JSON.
-8. Return a `SessionValidationReport` with status and event/trial/phase/sample
-   counts plus warnings.
+9. Return a `SessionValidationReport` with status and
+   event/command/trial/phase/sample counts plus warnings.
 
 ## Structural reconstruction
 
 Event validation does not merely count lines. It compares the timeline with the
 saved plan and enforces the expected nesting/order of rest, break, block, trial,
-and phase boundaries, including stimulus presentation. For complete sessions,
-every planned trial and phase must close. Aborted/failed/incomplete sessions may
-end early but their recorded prefix must still be structurally coherent.
+and phase boundaries, including stimulus presentation. Superseded trial
+outcomes do not advance plan position; trial repeat preserves position and
+block repeat resets it while requiring monotonically increasing attempt IDs.
+For complete sessions, every planned trial and phase must close.
+Aborted/failed/incomplete sessions may end early but their recorded prefix must
+still be structurally coherent.
 
 This makes the persisted plan the validation oracle. Offline consumers do not
 need to reconstruct randomization from a seed or infer phase identity from

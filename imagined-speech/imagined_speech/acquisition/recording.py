@@ -7,6 +7,7 @@ import json
 import queue
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,21 @@ class _QueuedBatch:
 
 
 _QUEUE_STOP = object()
+
+
+@dataclass(frozen=True)
+class AcquisitionSnapshot:
+    running: bool
+    sample_count: int
+    dropped_batches: int
+    dropped_samples: int
+    timestamp_discontinuities: int
+    read_errors: int
+    write_errors: int
+    last_health_kind: str
+    last_health_severity: str
+    channel_names: tuple[str, ...]
+    recent_samples: tuple[tuple[float, ...], ...]
 
 
 class AcquisitionRecorder(EventSink):
@@ -54,6 +70,7 @@ class AcquisitionRecorder(EventSink):
         self._stop_reader = threading.Event()
         self._read_lock = threading.Lock()
         self._log_lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._writer_thread: threading.Thread | None = None
         self._raw_file: Any = None
@@ -75,6 +92,10 @@ class AcquisitionRecorder(EventSink):
         self._stopped_monotonic: float | None = None
         self._started_wall: datetime | None = None
         self._stopped_wall: datetime | None = None
+        recent_capacity = max(250, int(5 * backend.profile.sampling_rate_hz))
+        self._recent_samples: deque[tuple[float, ...]] = deque(maxlen=recent_capacity)
+        self._last_health_kind = "created"
+        self._last_health_severity = "info"
 
     @property
     def running(self) -> bool:
@@ -87,6 +108,29 @@ class AcquisitionRecorder(EventSink):
     @property
     def dropped_samples(self) -> int:
         return self._dropped_samples
+
+    def snapshot(self, max_samples: int = 750) -> AcquisitionSnapshot:
+        if max_samples <= 0:
+            raise ValueError("max_samples must be positive")
+        with self._snapshot_lock:
+            recent = tuple(self._recent_samples)[-max_samples:]
+            return AcquisitionSnapshot(
+                running=self._running,
+                sample_count=self._sample_count,
+                dropped_batches=self._dropped_batches,
+                dropped_samples=self._dropped_samples,
+                timestamp_discontinuities=self._timestamp_gaps,
+                read_errors=self._read_errors,
+                write_errors=self._write_errors,
+                last_health_kind=self._last_health_kind,
+                last_health_severity=self._last_health_severity,
+                channel_names=self.backend.channel_names,
+                recent_samples=recent,
+            )
+
+    def flush_pending(self) -> None:
+        """Wait until all batches already accepted by the writer queue are handled."""
+        self._queue.join()
 
     def start(self) -> None:
         if self._running or self._closed:
@@ -332,7 +376,9 @@ class AcquisitionRecorder(EventSink):
                     *(f"{value:.9f}" for value in sample),
                 )
             )
-            self._sample_count += 1
+            with self._snapshot_lock:
+                self._recent_samples.append(tuple(sample))
+                self._sample_count += 1
         self._raw_file.flush()
 
     def _health(self, kind: str, severity: str, **details: Any) -> None:
@@ -344,6 +390,9 @@ class AcquisitionRecorder(EventSink):
             "wall_time_utc": self.clock.wall_time_utc().isoformat(),
             **details,
         }
+        with self._snapshot_lock:
+            self._last_health_kind = kind
+            self._last_health_severity = severity
         with self._log_lock:
             if self._health_file is not None and not self._health_file.closed:
                 self._health_file.write(json.dumps(record, ensure_ascii=False) + "\n")

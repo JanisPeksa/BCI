@@ -25,11 +25,15 @@ class SubjectWindow(QWidget):
         engine: ProtocolEngine,
         resolved: ResolvedExperiment,
         virtual_step_ms: int = 250,
+        *,
+        auto_start: bool = True,
+        drive_engine: bool = True,
     ) -> None:
         super().__init__()
         self.engine = engine
         self.resolved = resolved
         self.virtual_step_ms = virtual_step_ms
+        self.drive_engine = drive_engine
         self._last_step_id: str | None = None
         self._terminal_close_scheduled = False
         self._source_pixmap: QPixmap | None = None
@@ -82,12 +86,13 @@ class SubjectWindow(QWidget):
         )
         self.timer.timeout.connect(self._on_timer)
 
-        self.engine.start()
+        if auto_start:
+            self.engine.start()
         self._render()
         self.timer.start()
 
     def _on_timer(self) -> None:
-        if self.engine.state == RunState.RUNNING:
+        if self.drive_engine and self.engine.state == RunState.RUNNING:
             if isinstance(self.engine.clock, VirtualClock):
                 self.engine.clock.advance(self.engine.remaining_seconds)
             self.engine.tick()

@@ -19,6 +19,11 @@ from pydantic import ValidationError
 from imagined_speech import __version__
 from imagined_speech.config import DeviceProfile, ExperimentConfig, ResolvedExperiment
 from imagined_speech.events import EventSink, EventType, ProtocolEvent
+from imagined_speech.operator import (
+    OperatorCommand,
+    OperatorCommandRecord,
+    OperatorCommandStatus,
+)
 from imagined_speech.plan import (
     BlockPlan,
     BreakPlan,
@@ -37,6 +42,9 @@ TERMINAL_EVENT_STATUS = {
 ACTION_EVENTS = {
     EventType.SESSION_PAUSED,
     EventType.SESSION_RESUMED,
+    EventType.TRIAL_REPEATED,
+    EventType.BLOCK_REPEATED,
+    EventType.REFIT_RECORDED,
     EventType.SESSION_ABORTED,
     EventType.SESSION_FAILED,
 }
@@ -56,6 +64,7 @@ class SessionValidationReport:
     phase_count: int
     sample_count: int = 0
     warnings: tuple[str, ...] = ()
+    operator_command_count: int = 0
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -103,6 +112,7 @@ class SessionWriter(EventSink):
         output_root: Path | None = None,
         *,
         auto_finalize: bool = True,
+        session_label: str | None = None,
     ) -> None:
         if not PARTICIPANT_PATTERN.fullmatch(participant_id):
             raise ValueError(
@@ -110,17 +120,23 @@ class SessionWriter(EventSink):
             )
         if plan.config_hash != config_fingerprint(resolved.config):
             raise ValueError("session plan does not match experiment configuration")
+        if session_label is not None and not PARTICIPANT_PATTERN.fullmatch(session_label):
+            raise ValueError(
+                "session label must be 1-64 letters, digits, underscores, or hyphens"
+            )
 
         self.resolved = resolved
         self.plan = plan
         self.participant_id = participant_id
+        self.session_label = session_label
         self.session_id = str(uuid.uuid4())
         self.created_at = datetime.now(UTC)
         root = (output_root or resolved.output_root).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         directory_name = (
             f"{self.created_at.strftime('%Y%m%dT%H%M%SZ')}_"
-            f"{participant_id}_{self.session_id[:8]}"
+            f"{participant_id}_"
+            f"{session_label + '_' if session_label else ''}{self.session_id[:8]}"
         )
         self.path = root / directory_name
         self.path.mkdir(parents=False, exist_ok=False)
@@ -128,6 +144,7 @@ class SessionWriter(EventSink):
         self._lock = threading.RLock()
         self._closed = False
         self._auto_finalize = auto_finalize
+        self._operator_sequence = 0
         self._artifacts = {
             "manifest.json",
             "experiment-config.yaml",
@@ -169,6 +186,7 @@ class SessionWriter(EventSink):
             "software_version": __version__,
             "session_id": self.session_id,
             "participant_id": self.participant_id,
+            "session_label": self.session_label,
             "experiment_id": self.resolved.config.experiment_id,
             "plan_id": self.plan.plan_id,
             "config_hash": self.plan.config_hash,
@@ -208,6 +226,48 @@ class SessionWriter(EventSink):
             if not (self.path / normalized).is_file():
                 raise ValueError(f"session artifact does not exist: {relative_name}")
             self._artifacts.add(normalized.as_posix())
+
+    def record_operator_command(
+        self,
+        *,
+        command: OperatorCommand,
+        status: OperatorCommandStatus,
+        source: str,
+        monotonic_seconds: float,
+        wall_time_utc: datetime,
+        reason: str,
+        state_before: str,
+        resulting_state: str,
+        note: str | None = None,
+        block_id: str | None = None,
+        trial_id: str | None = None,
+        attempt: int | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> OperatorCommandRecord:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("cannot write to a finalized session")
+            self._operator_sequence += 1
+            record = OperatorCommandRecord(
+                sequence_number=self._operator_sequence,
+                command=command,
+                status=status,
+                source=source,
+                monotonic_seconds=monotonic_seconds,
+                wall_time_utc=wall_time_utc,
+                reason=reason,
+                note=note,
+                state_before=state_before,
+                resulting_state=resulting_state,
+                session_id=self.session_id,
+                block_id=block_id,
+                trial_id=trial_id,
+                attempt=attempt,
+                payload=payload or {},
+            )
+            self._action_file.write(record.model_dump_json() + "\n")
+            self._action_file.flush()
+            return record
 
     def finalize(self, status: str) -> None:
         if status not in {"complete", "aborted", "failed", "incomplete"}:
@@ -334,6 +394,7 @@ def _validate_event_structure(
 
     active_block: str | None = None
     active_trial: str | None = None
+    active_attempt: int | None = None
     active_phase: str | None = None
     active_rest: str | None = None
     active_break: str | None = None
@@ -343,7 +404,8 @@ def _validate_event_structure(
     ended_phases: set[str] = set()
     item_position = 0
     trial_positions = {block_id: 0 for block_id in block_ids}
-    phase_positions = {trial_id: 0 for trial_id in trial_ids}
+    phase_positions: dict[tuple[str, int], int] = {}
+    latest_attempt = {trial_id: 0 for trial_id in trial_ids}
     stimulus_seen = False
 
     def expect_item(kind: str, identifier: str | None) -> None:
@@ -414,22 +476,38 @@ def _validate_event_structure(
             position = trial_positions[active_block]
             if position >= len(expected_trials) or event.trial_id != expected_trials[position]:
                 raise SessionValidationError("trial is out of plan order or in the wrong block")
+            if event.attempt != latest_attempt[event.trial_id] + 1:
+                raise SessionValidationError("trial attempt sequence is discontinuous")
+            latest_attempt[event.trial_id] = event.attempt
             active_trial = event.trial_id
+            active_attempt = event.attempt
+            phase_positions[(event.trial_id, event.attempt)] = 0
         elif event_type == EventType.TRIAL_ENDED:
-            if event.trial_id != active_trial or active_phase:
+            if (
+                event.trial_id != active_trial
+                or event.attempt != active_attempt
+                or active_phase
+            ):
                 raise SessionValidationError("trial end does not match active trial")
             assert event.trial_id is not None
-            ended_trials.add(event.trial_id)
             assert active_block is not None
-            trial_positions[active_block] += 1
+            outcome = event.payload.get("outcome", "completed")
+            if outcome == "completed":
+                ended_trials.add(event.trial_id)
+                trial_positions[active_block] += 1
+            elif outcome not in {"superseded", "aborted", "failed"}:
+                raise SessionValidationError(f"unknown trial outcome: {outcome}")
             active_trial = None
+            active_attempt = None
         elif event_type == EventType.PHASE_STARTED:
             if not active_trial or active_phase:
                 raise SessionValidationError("phase started outside a trial")
             if event.step_id not in phase_ids:
                 raise SessionValidationError("phase event references an unknown phase")
             expected_phases = phases_by_trial[active_trial]
-            position = phase_positions[active_trial]
+            if event.attempt != active_attempt or active_attempt is None:
+                raise SessionValidationError("phase attempt does not match active trial")
+            position = phase_positions[(active_trial, active_attempt)]
             if position >= len(expected_phases) or event.step_id != expected_phases[position]:
                 raise SessionValidationError("phase is out of plan order or in the wrong trial")
             if event.phase != phase_types[event.step_id]:
@@ -448,10 +526,36 @@ def _validate_event_structure(
             if event.phase == "stimulus" and not stimulus_seen:
                 raise SessionValidationError("stimulus phase has no presentation event")
             assert event.step_id is not None
-            ended_phases.add(event.step_id)
             assert active_trial is not None
-            phase_positions[active_trial] += 1
+            assert active_attempt is not None
+            outcome = event.payload.get("outcome", "completed")
+            if outcome == "completed":
+                ended_phases.add(event.step_id)
+                phase_positions[(active_trial, active_attempt)] += 1
+            elif outcome not in {"superseded", "aborted", "failed"}:
+                raise SessionValidationError(f"unknown phase outcome: {outcome}")
             active_phase = None
+        elif event_type == EventType.TRIAL_REPEATED:
+            if not active_block or active_trial or active_phase:
+                raise SessionValidationError("trial repeat occurred outside a recoverable block")
+            expected_trials = trials_by_block[active_block]
+            position = trial_positions[active_block]
+            if position >= len(expected_trials) or event.trial_id != expected_trials[position]:
+                raise SessionValidationError("trial repeat does not match the expected trial")
+            assert event.trial_id is not None
+            ended_trials.discard(event.trial_id)
+            ended_phases.difference_update(phases_by_trial[event.trial_id])
+        elif event_type == EventType.BLOCK_REPEATED:
+            if event.block_id != active_block or active_trial or active_phase:
+                raise SessionValidationError("block repeat does not match the active block")
+            assert active_block is not None
+            trial_positions[active_block] = 0
+            for trial_id in trials_by_block[active_block]:
+                ended_trials.discard(trial_id)
+                ended_phases.difference_update(phases_by_trial[trial_id])
+        elif event_type == EventType.REFIT_RECORDED:
+            if not (active_block or active_rest or active_break):
+                raise SessionValidationError("refit was recorded outside an active session scope")
         elif event_type == EventType.SESSION_PAUSED:
             if paused:
                 raise SessionValidationError("session was paused twice")
@@ -530,6 +634,11 @@ def validate_session(path: str | Path) -> SessionValidationReport:
         if event.session_id != manifest.get("session_id"):
             raise SessionValidationError("event references a different session ID")
     trial_count, phase_count = _validate_event_structure(events, plan, status)
+    operator_command_count = _validate_operator_actions(
+        session_path / "operator-actions.jsonl",
+        events,
+        str(manifest["session_id"]),
+    )
     sample_count = _validate_acquisition_artifacts(session_path, manifest, events)
     return SessionValidationReport(
         session_path=session_path,
@@ -539,8 +648,47 @@ def validate_session(path: str | Path) -> SessionValidationReport:
         trial_count=trial_count,
         phase_count=phase_count,
         sample_count=sample_count,
+        operator_command_count=operator_command_count,
         warnings=warnings,
     )
+
+
+def _validate_operator_actions(
+    path: Path, events: list[ProtocolEvent], session_id: str
+) -> int:
+    events_by_sequence = {event.sequence_number: event for event in events}
+    command_count = 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SessionValidationError(f"cannot read operator actions: {exc}") from exc
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SessionValidationError(
+                f"invalid operator action at line {line_number}"
+            ) from exc
+        try:
+            if value.get("record_type") == "operator_command":
+                record = OperatorCommandRecord.model_validate(value)
+                command_count += 1
+                if record.sequence_number != command_count:
+                    raise SessionValidationError("operator command sequence is discontinuous")
+                if record.session_id != session_id:
+                    raise SessionValidationError("operator command references another session")
+            else:
+                event = ProtocolEvent.model_validate(value)
+                authoritative = events_by_sequence.get(event.sequence_number)
+                if authoritative is None or event != authoritative:
+                    raise SessionValidationError(
+                        "operator action event does not match the protocol timeline"
+                    )
+        except ValidationError as exc:
+            raise SessionValidationError(
+                f"invalid operator action schema at line {line_number}: {exc}"
+            ) from exc
+    return command_count
 
 
 def _validate_acquisition_artifacts(

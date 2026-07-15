@@ -10,6 +10,10 @@ Every milestone must leave the application usable and must preserve the
 central invariant: raw EEG and previously recorded events are append-only and
 never modified by QC or recovery actions.
 
+**Implementation status:** Milestones 1–4 are implemented. Milestone 5 (core
+online QC) is the next planned increment. Cyton hardware acceptance remains
+pending until a board is available.
+
 ## Milestone 1 — Protocol Contract and Foundation
 
 Establish the scientific and software contracts before building the runtime.

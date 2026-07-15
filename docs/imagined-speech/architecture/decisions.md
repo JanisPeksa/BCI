@@ -271,10 +271,75 @@ native libraries.
 integration tests are conditional on optional packages, so release validation
 must also run with the full extras installed.
 
+## AD-023 — Introduce a GUI-independent session runtime
+
+**Decision.** Put per-session composition, pre/post roll, command execution,
+finalization, and validation in `SessionRuntime`; keep Qt layout in
+`ExperimenterWindow`.
+
+**Rationale.** Experimenter controls need one owner for engine, acquisition,
+and persistence lifecycle, but that owner should remain testable without Qt.
+
+**Consequences.** GUI and tests share command/finalization behavior. Headless
+CLI composition remains separate for now, so future consolidation may extract
+more shared lifecycle code.
+
+## AD-024 — Run subject and experimenter views in one process with one driver
+
+**Decision.** Open separate Qt windows/displays, but let the experimenter
+runtime drive engine ticks while the subject window only renders `ViewState`.
+
+**Rationale.** A second state/timer owner could make displayed phases diverge
+from recorded events; separate processes would require a transport protocol not
+needed for the local two-display milestone.
+
+**Consequences.** Diagnostics never enter the subject widget contract and both
+windows share exact engine state. A GUI-process crash affects both displays,
+though recorder finalization is attempted through controlled exception/close
+paths.
+
+## AD-025 — Audit command requests separately from protocol effects
+
+**Decision.** Persist a typed `OperatorCommandRecord` for every experimenter
+request, accepted or rejected, while accepted effects also remain protocol
+events.
+
+**Rationale.** Rejected commands have no engine transition but are still
+important operational evidence. Events alone cannot represent state-before,
+reason, note, and resulting state consistently.
+
+**Consequences.** `operator-actions.jsonl` contains typed command records plus
+legacy action-event copies and its validator understands both. Offline tools
+must distinguish entries by `record_type`.
+
+## AD-026 — Implement recovery by superseding and appending attempts
+
+**Decision.** Close active phase/trial scopes with `outcome: superseded`, emit a
+repeat event, and insert new actions derived from the persisted plan with
+incremented attempts.
+
+**Rationale.** Recovery must never delete earlier EEG/events, and validators
+must be able to distinguish final completed work from abandoned attempts.
+
+**Consequences.** Session reconstruction supports plan-position resets and
+attempt sequences. Repeat is currently limited to an active block trial; a
+post-block repeat requires a future explicit plan-amendment model.
+
+## AD-027 — Render live EEG from a bounded copied snapshot
+
+**Decision.** Keep a five-second ring of recently written source rows in the
+recorder and expose immutable snapshots to the experimenter UI.
+
+**Rationale.** Live traces and channel reception should not reread the growing
+CSV, block acquisition, or let GUI code touch source buffers.
+
+**Consequences.** Monitoring has bounded memory and can lag the source by the
+writer queue. Its `receiving/flat/no data` labels are operational indicators,
+not signal-quality results; QC remains Milestone 5.
+
 ## Deferred decisions
 
-The following remain open because their modules are not implemented: the
-experimenter UI/application-service boundary; pause/repeat/refit recovery data
-model; QC queue/backpressure/result schema implementation; binary long-term raw
-format; session loader and epoch index APIs; schema migration tooling; and data
+The following remain open because their modules are not implemented: the QC
+queue/backpressure/result schema implementation; binary long-term raw format;
+session loader and epoch index APIs; schema migration tooling; and data
 governance/encryption/pseudonymization policy.

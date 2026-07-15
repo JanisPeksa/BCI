@@ -77,3 +77,79 @@ def test_abort_is_terminal() -> None:
     assert sink.events[-1].event_type == EventType.SESSION_ABORTED
     with pytest.raises(RuntimeError):
         engine.resume()
+
+
+def test_repeat_trial_preserves_superseded_attempt_and_restarts_paused() -> None:
+    engine, clock, sink = make_engine()
+    engine.start()
+    clock.advance(engine.remaining_seconds)
+    engine.tick()
+    assert engine.current_action is not None
+    assert engine.current_action.context.trial_id is not None
+
+    engine.pause()
+    repeated_trial = engine.current_action.context.trial_id
+    engine.repeat_current_trial()
+
+    assert engine.state == RunState.PAUSED
+    assert engine.current_action is not None
+    assert engine.current_action.context.trial_id == repeated_trial
+    assert engine.current_action.context.attempt == 2
+    engine.resume()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    outcomes = [
+        event.payload.get("outcome")
+        for event in sink.events
+        if event.event_type == EventType.TRIAL_ENDED
+        and event.trial_id == repeated_trial
+    ]
+    assert outcomes == ["superseded", "completed"]
+    assert EventType.TRIAL_REPEATED in [event.event_type for event in sink.events]
+
+
+def test_repeat_block_restarts_trial_order_with_new_attempts() -> None:
+    engine, clock, sink = make_engine()
+    engine.start()
+    while not (
+        engine.current_action is not None
+        and engine.current_action.context.block_type == "experiment"
+    ):
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    engine.repeat_current_block()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.state == RunState.COMPLETED
+    assert EventType.BLOCK_REPEATED in [event.event_type for event in sink.events]
+    experiment_starts = [
+        event
+        for event in sink.events
+        if event.event_type == EventType.TRIAL_STARTED
+        and event.block_type == "experiment"
+    ]
+    assert len(experiment_starts) == 3
+    assert experiment_starts[0].trial_id == experiment_starts[1].trial_id
+    assert [experiment_starts[0].attempt, experiment_starts[1].attempt] == [1, 2]
+
+
+def test_abort_closes_active_protocol_scopes() -> None:
+    engine, clock, sink = make_engine()
+    engine.start()
+    clock.advance(engine.remaining_seconds)
+    engine.tick()
+
+    engine.abort()
+
+    terminal_types = [event.event_type for event in sink.events[-4:]]
+    assert terminal_types == [
+        EventType.PHASE_ENDED,
+        EventType.TRIAL_ENDED,
+        EventType.BLOCK_ENDED,
+        EventType.SESSION_ABORTED,
+    ]

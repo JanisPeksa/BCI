@@ -3,10 +3,10 @@
 ## Current system boundary
 
 The application is a local Python process with optional external data
-producers. The CLI is the composition root: it loads configuration, compiles a
-plan, creates the clock and persistence package, selects an acquisition
-backend, connects event consumers, and selects either a headless runner or the
-subject UI.
+producers. The CLI is the composition root for headless and subject-only runs.
+For the two-display workflow it launches `ExperimenterWindow`, while
+`SessionRuntime` composes and owns the per-session plan, engine, acquisition,
+persistence, and command audit.
 
 The current implementation deliberately has no global service container or
 long-lived singleton state. A session is an object graph created for one run
@@ -36,6 +36,12 @@ flowchart LR
     FANOUT --> RECORDER
     FANOUT --> WRITER
     ENGINE -->|"ViewState"| RUNNER["Headless runner or SubjectWindow"]
+    ENGINE -->|"events + ViewState"| EXP["ExperimenterWindow"]
+    RECORDER -->|"AcquisitionSnapshot"| EXP
+    EXP -->|"OperatorCommand"| RUNTIME["SessionRuntime"]
+    RUNTIME --> ENGINE
+    RUNTIME --> RECORDER
+    RUNTIME --> WRITER
 
     BACKEND -->|"SampleBatch"| RECORDER
     RECORDER --> RAW["raw EEG + marker/health metadata"]
@@ -52,6 +58,9 @@ flowchart LR
 | `engine` | Protocol state, deadlines, transition order, marker selection, subject-facing view model | Qt widgets, file I/O, EEG reads |
 | `events` | Stable event schema and synchronous fan-out boundary | Event scheduling or persistence policy |
 | `subject_ui` | Qt presentation, image/audio playback, display selection, user-initiated safe abort | Protocol truth or independent phase timing |
+| `runtime` | GUI-session composition, pre/post roll, command execution/audit, controlled finalization | Qt layout or signal processing |
+| `experimenter_ui` | Setup/preview, display placement, live copied traces/health, recovery controls, summary export | Raw persistence, protocol scheduling, QC decisions |
+| `operator` | Typed accepted/rejected command audit schema | Command execution |
 | `simulation` | Driving the engine with real or virtual time without Qt | Protocol decisions |
 | `acquisition` backends | Source-specific connection and conversion to `SampleBatch` | Session file format, UI, trial semantics |
 | `AcquisitionRecorder` | Continuous reading, queueing, raw CSV writing, marker requests, acquisition health/metadata | Changing EEG values or deciding protocol transitions |
@@ -61,8 +70,8 @@ flowchart LR
 
 ## Startup and composition
 
-For `simulate` and `run`, `_execute_session` performs these operations in
-order:
+For `simulate` and `run-subject`, `_execute_session` performs these operations
+in order:
 
 1. `load_experiment` parses and validates the experiment YAML, referenced
    device profile, and enabled assets. Failure here creates no session.
@@ -79,6 +88,12 @@ order:
 8. Acquisition is prepared and started, then pre-roll is recorded before the
    engine emits `session_started`.
 9. A headless runner or `SubjectWindow` starts and drives the engine.
+
+For `run`, the experimenter setup first validates and previews its selected
+configuration/device/seed/displays. Pressing Start creates `SessionRuntime`,
+opens a passive subject window, starts acquisition/pre-roll, and lets the
+experimenter timer drive `runtime.tick()`. The runtime uses the same underlying
+construction and shutdown order as the headless path.
 
 The explicit construction makes dependencies visible and makes the engine
 testable with a memory sink and virtual clock.
@@ -184,12 +199,13 @@ checksums, which the validator reports with the corresponding relaxed policy.
 
 ## Implemented and planned boundaries
 
-The current subject UI is the only GUI. The experimenter UI, recovery commands
-such as repeat/refit, online QC workers, offline `SessionLoader`, epoching, and
-classification modules are roadmap work. The existing typed boundaries are
+Subject and experimenter UIs plus pause/resume/repeat/refit/abort recovery are
+implemented. Online QC workers, offline `SessionLoader`, epoching, and
+classification modules remain roadmap work. The existing typed boundaries are
 intended to accept them:
 
-- experimenter controls call engine commands and produce `ProtocolEvent`s;
+- experimenter controls call `SessionRuntime.execute`, producing both
+  `ProtocolEvent`s and accepted/rejected `OperatorCommandRecord`s;
 - QC consumes copies of acquired windows and writes new derivative records;
 - offline tools consume the session package rather than internal live objects;
 - none of these consumers should rewrite `eeg_raw.csv` or `events.jsonl`.

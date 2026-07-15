@@ -16,7 +16,7 @@ from imagined_speech.events import (
     NullEventSink,
     ProtocolEvent,
 )
-from imagined_speech.plan import BlockPlan, BreakPlan, RestPlan, SessionPlan
+from imagined_speech.plan import BlockPlan, BreakPlan, RestPlan, SessionPlan, TrialPlan
 
 
 class RunState(StrEnum):
@@ -128,6 +128,68 @@ def _headline(screen: str, stimulus_label: str | None = None) -> str:
     }.get(screen, screen.upper())
 
 
+def _trial_runtime_actions(
+    block: BlockPlan,
+    trial: TrialPlan,
+    trial_count: int,
+    attempt: int,
+) -> list[RuntimeAction]:
+    actions: list[RuntimeAction] = []
+    trial_context = _Context(
+        step_id=trial.trial_id,
+        block_id=block.block_id,
+        block_type=block.block_type,
+        block_number=block.block_number,
+        block_count=block.block_count,
+        trial_id=trial.trial_id,
+        trial_number=trial.trial_number,
+        trial_count=trial_count,
+        attempt=attempt,
+        stimulus_id=trial.stimulus_id,
+        stimulus_label=trial.stimulus_label,
+    )
+    actions.append(_EventAction(EventType.TRIAL_STARTED, trial_context))
+    for phase in trial.phases:
+        phase_context = _Context(
+            step_id=phase.step_id,
+            block_id=block.block_id,
+            block_type=block.block_type,
+            block_number=block.block_number,
+            block_count=block.block_count,
+            trial_id=trial.trial_id,
+            trial_number=trial.trial_number,
+            trial_count=trial_count,
+            attempt=attempt,
+            phase=phase.phase,
+            stimulus_id=trial.stimulus_id,
+            stimulus_label=trial.stimulus_label,
+            instruction=phase.instruction,
+        )
+        actions.append(_EventAction(EventType.PHASE_STARTED, phase_context))
+        if phase.phase == Phase.STIMULUS:
+            actions.append(_EventAction(EventType.STIMULUS_PRESENTED, phase_context))
+        actions.append(
+            _TimedAction(
+                screen=phase.phase.value,
+                duration_seconds=phase.duration_seconds,
+                context=phase_context,
+            )
+        )
+        actions.append(_EventAction(EventType.PHASE_ENDED, phase_context))
+    actions.append(_EventAction(EventType.TRIAL_ENDED, trial_context))
+    return actions
+
+
+def _block_context(block: BlockPlan) -> _Context:
+    return _Context(
+        step_id=block.block_id,
+        block_id=block.block_id,
+        block_type=block.block_type,
+        block_number=block.block_number,
+        block_count=block.block_count,
+    )
+
+
 def build_runtime_actions(plan: SessionPlan) -> tuple[RuntimeAction, ...]:
     actions: list[RuntimeAction] = []
     practice_total = plan.practice_trial_count
@@ -166,60 +228,11 @@ def build_runtime_actions(plan: SessionPlan) -> tuple[RuntimeAction, ...]:
             continue
 
         assert isinstance(item, BlockPlan)
-        block_context = _Context(
-            step_id=item.block_id,
-            block_id=item.block_id,
-            block_type=item.block_type,
-            block_number=item.block_number,
-            block_count=item.block_count,
-        )
+        block_context = _block_context(item)
         actions.append(_EventAction(EventType.BLOCK_STARTED, block_context))
         trial_count = practice_total if item.block_type == "practice" else experiment_total
         for trial in item.trials:
-            trial_context = _Context(
-                step_id=trial.trial_id,
-                block_id=item.block_id,
-                block_type=item.block_type,
-                block_number=item.block_number,
-                block_count=item.block_count,
-                trial_id=trial.trial_id,
-                trial_number=trial.trial_number,
-                trial_count=trial_count,
-                attempt=1,
-                stimulus_id=trial.stimulus_id,
-                stimulus_label=trial.stimulus_label,
-            )
-            actions.append(_EventAction(EventType.TRIAL_STARTED, trial_context))
-            for phase in trial.phases:
-                phase_context = _Context(
-                    step_id=phase.step_id,
-                    block_id=item.block_id,
-                    block_type=item.block_type,
-                    block_number=item.block_number,
-                    block_count=item.block_count,
-                    trial_id=trial.trial_id,
-                    trial_number=trial.trial_number,
-                    trial_count=trial_count,
-                    attempt=1,
-                    phase=phase.phase,
-                    stimulus_id=trial.stimulus_id,
-                    stimulus_label=trial.stimulus_label,
-                    instruction=phase.instruction,
-                )
-                actions.append(_EventAction(EventType.PHASE_STARTED, phase_context))
-                if phase.phase == Phase.STIMULUS:
-                    actions.append(
-                        _EventAction(EventType.STIMULUS_PRESENTED, phase_context)
-                    )
-                actions.append(
-                    _TimedAction(
-                        screen=phase.phase.value,
-                        duration_seconds=phase.duration_seconds,
-                        context=phase_context,
-                    )
-                )
-                actions.append(_EventAction(EventType.PHASE_ENDED, phase_context))
-            actions.append(_EventAction(EventType.TRIAL_ENDED, trial_context))
+            actions.extend(_trial_runtime_actions(item, trial, trial_count, attempt=1))
         actions.append(_EventAction(EventType.BLOCK_ENDED, block_context))
     return tuple(actions)
 
@@ -239,7 +252,7 @@ class ProtocolEngine:
         self.clock = clock
         self.sink = sink or NullEventSink()
         self.state = RunState.READY
-        self._actions = build_runtime_actions(plan)
+        self._actions = list(build_runtime_actions(plan))
         self._cursor = 0
         self._current: _TimedAction | None = None
         self._deadline: float | None = None
@@ -248,6 +261,11 @@ class ProtocolEngine:
         self._stimulus_indexes = {
             stimulus.id: index for index, stimulus in enumerate(config.stimuli)
         }
+        self._blocks = {block.block_id: block for block in plan.blocks}
+        self._trials = {
+            trial.trial_id: trial for block in plan.blocks for trial in block.trials
+        }
+        self._attempts: dict[str, int] = {}
 
     @property
     def current_action(self) -> _TimedAction | None:
@@ -298,10 +316,104 @@ class ProtocolEngine:
         self.state = RunState.RUNNING
         self._emit(EventType.SESSION_RESUMED, self._current.context, source)
 
+    def repeat_current_trial(
+        self, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        context = self._require_active_trial("repeat trial")
+        assert context.trial_id is not None and context.block_id is not None
+        was_paused = self.state == RunState.PAUSED
+        previous_attempt = context.attempt or self._attempts.get(context.trial_id, 1)
+        self._close_current_trial("superseded")
+        self._discard_until(
+            lambda action: isinstance(action, _EventAction)
+            and action.event_type == EventType.TRIAL_ENDED
+            and action.context.trial_id == context.trial_id
+        )
+
+        block = self._blocks[context.block_id]
+        trial = self._trials[context.trial_id]
+        next_attempt = max(self._attempts.get(context.trial_id, 0), previous_attempt) + 1
+        trial_count = (
+            self.plan.practice_trial_count
+            if block.block_type == "practice"
+            else self.plan.experiment_trial_count
+        )
+        self._actions[self._cursor:self._cursor] = _trial_runtime_actions(
+            block, trial, trial_count, next_attempt
+        )
+        repeat_context = self._trial_context(block, trial, next_attempt)
+        self._emit(
+            EventType.TRIAL_REPEATED,
+            repeat_context,
+            source,
+            payload={
+                "superseded_attempt": previous_attempt,
+                "new_attempt": next_attempt,
+            },
+        )
+        self._restart_after_recovery(was_paused)
+
+    def repeat_current_block(
+        self, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        context = self._require_active_trial("repeat block")
+        assert context.block_id is not None
+        was_paused = self.state == RunState.PAUSED
+        block = self._blocks[context.block_id]
+        superseded_attempts = {
+            trial.trial_id: self._attempts[trial.trial_id]
+            for trial in block.trials
+            if trial.trial_id in self._attempts
+        }
+        self._close_current_trial("superseded")
+        self._discard_until(
+            lambda action: isinstance(action, _EventAction)
+            and action.event_type == EventType.BLOCK_ENDED
+            and action.context.block_id == block.block_id
+        )
+
+        trial_count = (
+            self.plan.practice_trial_count
+            if block.block_type == "practice"
+            else self.plan.experiment_trial_count
+        )
+        repeated_actions: list[RuntimeAction] = []
+        for trial in block.trials:
+            next_attempt = self._attempts.get(trial.trial_id, 0) + 1
+            repeated_actions.extend(
+                _trial_runtime_actions(block, trial, trial_count, next_attempt)
+            )
+        repeated_actions.append(_EventAction(EventType.BLOCK_ENDED, _block_context(block)))
+        self._actions[self._cursor:self._cursor] = repeated_actions
+        self._emit(
+            EventType.BLOCK_REPEATED,
+            _block_context(block),
+            source,
+            payload={"superseded_attempts": superseded_attempts},
+        )
+        self._restart_after_recovery(was_paused)
+
+    def record_refit(
+        self, note: str, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        if self.state not in {RunState.RUNNING, RunState.PAUSED}:
+            raise RuntimeError(f"cannot record refit from {self.state.value}")
+        cleaned = note.strip()
+        if not cleaned:
+            raise ValueError("refit note must not be empty")
+        context = self._current.context if self._current else _Context()
+        self._emit(
+            EventType.REFIT_RECORDED,
+            context,
+            source,
+            payload={"note": cleaned},
+        )
+
     def abort(self, source: EventSource = EventSource.OPERATOR) -> None:
         if self.state not in {RunState.RUNNING, RunState.PAUSED}:
             raise RuntimeError(f"cannot abort protocol from {self.state.value}")
         context = self._current.context if self._current else _Context()
+        self._close_current_scopes("aborted")
         self.state = RunState.ABORTED
         self._emit(EventType.SESSION_ABORTED, context, source)
 
@@ -376,7 +488,18 @@ class ProtocolEngine:
             action = self._actions[self._cursor]
             self._cursor += 1
             if isinstance(action, _EventAction):
-                self._emit(action.event_type, action.context, EventSource.ENGINE)
+                payload = None
+                if action.event_type == EventType.TRIAL_STARTED:
+                    assert action.context.trial_id is not None
+                    self._attempts[action.context.trial_id] = action.context.attempt or 1
+                elif action.event_type == EventType.TRIAL_ENDED:
+                    payload = {"outcome": "completed"}
+                self._emit(
+                    action.event_type,
+                    action.context,
+                    EventSource.ENGINE,
+                    payload=payload,
+                )
                 continue
             self._current = action
             self._deadline = anchor + action.duration_seconds
@@ -384,6 +507,105 @@ class ProtocolEngine:
 
         self.state = RunState.COMPLETED
         self._emit(EventType.SESSION_COMPLETED, _Context(), EventSource.SYSTEM)
+
+    def _require_active_trial(self, operation: str) -> _Context:
+        if self.state not in {RunState.RUNNING, RunState.PAUSED}:
+            raise RuntimeError(f"cannot {operation} from {self.state.value}")
+        if self._current is None or self._current.context.trial_id is None:
+            raise RuntimeError(f"cannot {operation} outside a trial")
+        return self._current.context
+
+    def _trial_context(
+        self, block: BlockPlan, trial: TrialPlan, attempt: int
+    ) -> _Context:
+        trial_count = (
+            self.plan.practice_trial_count
+            if block.block_type == "practice"
+            else self.plan.experiment_trial_count
+        )
+        return _Context(
+            step_id=trial.trial_id,
+            block_id=block.block_id,
+            block_type=block.block_type,
+            block_number=block.block_number,
+            block_count=block.block_count,
+            trial_id=trial.trial_id,
+            trial_number=trial.trial_number,
+            trial_count=trial_count,
+            attempt=attempt,
+            stimulus_id=trial.stimulus_id,
+            stimulus_label=trial.stimulus_label,
+        )
+
+    def _close_current_trial(self, outcome: str) -> None:
+        assert self._current is not None
+        context = self._current.context
+        if context.phase is not None:
+            self._emit(
+                EventType.PHASE_ENDED,
+                context,
+                EventSource.ENGINE,
+                payload={"outcome": outcome},
+            )
+        if context.trial_id is not None and context.block_id is not None:
+            block = self._blocks[context.block_id]
+            trial = self._trials[context.trial_id]
+            self._emit(
+                EventType.TRIAL_ENDED,
+                self._trial_context(block, trial, context.attempt or 1),
+                EventSource.ENGINE,
+                payload={"outcome": outcome},
+            )
+        self._current = None
+        self._deadline = None
+        self._paused_remaining = 0.0
+
+    def _close_current_scopes(self, outcome: str) -> None:
+        if self._current is None:
+            return
+        context = self._current.context
+        if context.trial_id is not None:
+            self._close_current_trial(outcome)
+            if context.block_id is not None:
+                self._emit(
+                    EventType.BLOCK_ENDED,
+                    _block_context(self._blocks[context.block_id]),
+                    EventSource.ENGINE,
+                    payload={"outcome": outcome},
+                )
+            return
+        if context.scope in {"initial", "final"}:
+            self._emit(
+                EventType.REST_ENDED,
+                context,
+                EventSource.ENGINE,
+                payload={"outcome": outcome},
+            )
+        elif context.scope == "inter_block":
+            self._emit(
+                EventType.BREAK_ENDED,
+                context,
+                EventSource.ENGINE,
+                payload={"outcome": outcome},
+            )
+        self._current = None
+        self._deadline = None
+        self._paused_remaining = 0.0
+
+    def _discard_until(self, predicate) -> None:
+        for index in range(self._cursor, len(self._actions)):
+            if predicate(self._actions[index]):
+                del self._actions[self._cursor:index + 1]
+                return
+        raise RuntimeError("cannot locate the end of the active recovery scope")
+
+    def _restart_after_recovery(self, remain_paused: bool) -> None:
+        self.state = RunState.RUNNING
+        self._advance_to_timed(self.clock.monotonic())
+        if remain_paused and self._current is not None and self.state == RunState.RUNNING:
+            self._paused_remaining = self._current.duration_seconds
+            self._deadline = None
+            self.state = RunState.PAUSED
 
     def _marker_code(self, event_type: EventType, context: _Context) -> int:
         markers: MarkerConfig = self.config.markers
@@ -394,6 +616,9 @@ class ProtocolEngine:
             EventType.SESSION_FAILED: markers.session_abort,
             EventType.SESSION_PAUSED: markers.operator_pause,
             EventType.SESSION_RESUMED: markers.operator_resume,
+            EventType.TRIAL_REPEATED: markers.operator_repeat_trial,
+            EventType.BLOCK_REPEATED: markers.operator_repeat_block,
+            EventType.REFIT_RECORDED: markers.operator_refit,
             EventType.BLOCK_STARTED: markers.block_start,
             EventType.BLOCK_ENDED: markers.block_end,
             EventType.BREAK_STARTED: markers.break_start,

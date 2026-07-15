@@ -24,6 +24,8 @@ stateDiagram-v2
     running --> running: deadline / boundary events + next timed action
     running --> paused: pause / session_paused
     paused --> running: resume / session_resumed
+    running --> running: repeat / supersede + insert actions
+    paused --> paused: repeat / supersede + insert actions
     running --> completed: plan exhausted / session_completed
     running --> aborted: abort / session_aborted
     paused --> aborted: abort / session_aborted
@@ -36,6 +38,13 @@ Invalid transitions raise `RuntimeError`; they are not silently ignored. Pause
 stores the current remaining duration, and resume creates a new deadline from
 the resume time. Acquisition is not owned by the engine and therefore is not
 paused.
+
+Trial and block recovery changes only the engine's future action list. The
+active phase/trial is closed with a superseded outcome, an explicit repeat
+event is emitted, and fresh actions are built from the immutable persisted
+plan with incremented attempts. When issued while paused, the replacement
+attempt is prepared but remains paused until resume. Abort similarly emits
+closing phase/trial/block or rest/break boundaries before its terminal event.
 
 ## Clock abstraction and drift control
 
@@ -69,9 +78,10 @@ Every semantic transition becomes a `ProtocolEvent` containing:
 - an extensible payload for scope or failure reason.
 
 The source distinguishes engine-generated boundaries, system lifecycle events,
-operator commands, and subject UI actions. Current event types cover session,
-rest, block, break, trial, phase, stimulus presentation, pause/resume, abort,
-and failure.
+operator commands, experimenter/subject UI actions, and system actions. Current
+event types cover session, rest, block, break, trial, phase, stimulus
+presentation, pause/resume, trial/block repeats, refit notes, abort, and
+failure.
 
 The engine owns marker mapping. Fixed lifecycle/boundary codes come from
 `MarkerConfig`; phase start/end codes are keyed by phase; stimulus presentation
@@ -126,8 +136,10 @@ what the next phase is.
 `SubjectWindow` is a Qt widget that receives only the engine and
 `ResolvedExperiment`:
 
-1. It starts the engine once its labels, multimedia objects, and timer exist.
-2. A 50 ms timer drives real-time runs. In virtual UI mode, each timer callback
+1. In subject-only mode it starts the engine once its labels, multimedia
+   objects, and timer exist. In the experimenter workflow it is passive and
+   waits for `SessionRuntime` to start the engine after pre-roll.
+2. A 50 ms timer drives real-time subject-only runs. In virtual UI mode, each timer callback
    jumps to the current action boundary for fast visual development.
 3. `_render` requests a fresh `ViewState` and updates headline, instruction,
    optional countdown, and progress.
@@ -146,10 +158,10 @@ off that thread.
 
 ## Current limitations and extension points
 
-- The only implemented interactive command in the subject UI is safe abort.
-  Pause/resume exist in the engine API but await the experimenter UI.
-- Repeat trial/block and refit semantics are roadmap work; attempts are already
-  present in event context to support that evolution.
+- The subject UI intentionally exposes only safe abort. Experimenter pause,
+  resume, repeat, refit, and abort controls live in a separate window.
+- Repeat is scoped to the currently active block trial; repeating the previous
+  block after its `block_ended` event is not yet supported.
 - Event fan-out is synchronous. Expensive future consumers must use their own
   queues so they cannot delay engine transitions.
 - The engine is not a general arbitrary workflow interpreter; it executes the

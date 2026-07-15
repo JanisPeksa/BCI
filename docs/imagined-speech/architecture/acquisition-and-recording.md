@@ -175,6 +175,16 @@ and final acquisition status.
 These are observational records. They never trigger EEG rewriting, automatic
 trial rejection, or protocol changes.
 
+## Live monitoring snapshot
+
+The recorder retains a thread-safe, bounded five-second ring of recently
+written source rows. `snapshot()` copies at most the requested number of rows
+plus recording/sample/drop/gap/error counters, channel names, and latest health
+state into immutable `AcquisitionSnapshot`. The experimenter UI renders this
+copy; it never tails or locks the authoritative CSV and cannot modify backend
+buffers. `flush_pending()` is provided for deterministic tests that need to
+wait until already queued virtual samples have reached the writer.
+
 ## Current limitations
 
 - LSL time correction is sampled during preparation rather than periodically;

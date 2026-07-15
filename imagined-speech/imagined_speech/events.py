@@ -18,6 +18,9 @@ class EventType(StrEnum):
     SESSION_FAILED = "session_failed"
     SESSION_PAUSED = "session_paused"
     SESSION_RESUMED = "session_resumed"
+    TRIAL_REPEATED = "trial_repeated"
+    BLOCK_REPEATED = "block_repeated"
+    REFIT_RECORDED = "refit_recorded"
     REST_STARTED = "rest_started"
     REST_ENDED = "rest_ended"
     BLOCK_STARTED = "block_started"
@@ -36,6 +39,7 @@ class EventSource(StrEnum):
     SYSTEM = "system"
     OPERATOR = "operator"
     SUBJECT_UI = "subject_ui"
+    EXPERIMENTER_UI = "experimenter_ui"
 
 
 class ProtocolEvent(StrictModel):

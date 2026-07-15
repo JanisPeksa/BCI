@@ -1,19 +1,21 @@
 # Imagined Speech
 
 Configurable research application for FEIS-style imagined-speech EEG
-experiments. Milestones 1–3 provide strict configuration, deterministic
+experiments. Milestones 1–4 provide strict configuration, deterministic
 protocol planning, simulated execution, a subject-facing Qt display,
-synthetic/BrainFlow/LSL acquisition, and reconstructable session packages.
+synthetic/BrainFlow/LSL acquisition, reconstructable session packages, and a
+two-display experimenter workflow with live monitoring and recovery controls.
 
 ## Architecture
 
 The [architecture guide](../docs/imagined-speech/architecture/README.md)
 documents module responsibilities, runtime and sample flow, persistence, and
-the decisions made through Milestone 3:
+the decisions made through Milestone 4:
 
 - [System overview and runtime data flow](../docs/imagined-speech/architecture/system-overview.md)
 - [Configuration and deterministic planning](../docs/imagined-speech/architecture/configuration-and-planning.md)
 - [Protocol engine, events, and subject UI](../docs/imagined-speech/architecture/engine-events-and-ui.md)
+- [Experimenter workflow and recovery](../docs/imagined-speech/architecture/experimenter-workflow.md)
 - [Acquisition and raw recording](../docs/imagined-speech/architecture/acquisition-and-recording.md)
 - [Session packages and validation](../docs/imagined-speech/architecture/session-packages-and-validation.md)
 - [Architecture decision record](../docs/imagined-speech/architecture/decisions.md)
@@ -48,7 +50,8 @@ python main.py preview
 python main.py preview --config imagined_speech/resources/configs/imagined_only.yaml
 python main.py preview --config imagined_speech/resources/configs/feis_comparable.yaml
 python main.py simulate
-python main.py run --windowed
+python main.py run
+python main.py run-subject --clock virtual --windowed
 python main.py validate-session sessions/<session-directory>
 python main.py publish-lsl-synthetic
 ```
@@ -58,9 +61,18 @@ and device paths are resolved relative to the YAML file that contains them.
 
 `simulate` uses the fast virtual clock by default and writes a complete session
 package including deterministic synthetic EEG. Use `--clock real` for
-wall-clock execution. `run` uses the real clock and configured subject screen
-by default; `--clock virtual --windowed` provides a fast visual development
-run. Press Escape to abort a subject run safely.
+wall-clock execution.
+
+`run` opens the experimenter application. Its setup page selects participant
+and session identifiers, protocol/device profiles, random seed, output path,
+montage, displays, and audio readiness. Starting a session opens the separate
+subject display and provides live EEG traces, channel reception, markers,
+recording/storage health, pause/resume, trial/block repeat, refit notes, and
+controlled abort. Accepted and rejected commands are persisted.
+
+`run-subject` retains the direct subject-only runner. Use `--clock virtual
+--windowed` for fast visual development. Press Escape to abort a subject run
+safely.
 
 ## Acquisition modes
 

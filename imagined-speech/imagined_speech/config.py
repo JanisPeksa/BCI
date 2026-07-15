@@ -116,6 +116,9 @@ class MarkerConfig(StrictModel):
     operator_pause: int = 50
     operator_resume: int = 51
     operator_abort: int = 52
+    operator_repeat_trial: int = 53
+    operator_repeat_block: int = 54
+    operator_refit: int = 55
     phase_end: dict[Phase, int] = {
         Phase.REST: 60,
         Phase.STIMULUS: 61,
@@ -145,6 +148,9 @@ class MarkerConfig(StrictModel):
             self.operator_pause,
             self.operator_resume,
             self.operator_abort,
+            self.operator_repeat_trial,
+            self.operator_repeat_block,
+            self.operator_refit,
             *self.phase_start.values(),
             *self.phase_end.values(),
         ]
@@ -225,6 +231,9 @@ class ExperimentConfig(StrictModel):
             self.markers.operator_pause,
             self.markers.operator_resume,
             self.markers.operator_abort,
+            self.markers.operator_repeat_trial,
+            self.markers.operator_repeat_block,
+            self.markers.operator_refit,
         }
         if stimulus_codes & fixed_codes:
             raise ValueError("stimulus marker range overlaps fixed marker codes")
