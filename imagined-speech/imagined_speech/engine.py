@@ -410,12 +410,19 @@ class ProtocolEngine:
         )
 
     def abort(self, source: EventSource = EventSource.OPERATOR) -> None:
-        if self.state not in {RunState.RUNNING, RunState.PAUSED}:
+        if self.state not in {RunState.READY, RunState.RUNNING, RunState.PAUSED}:
             raise RuntimeError(f"cannot abort protocol from {self.state.value}")
         context = self._current.context if self._current else _Context()
-        self._close_current_scopes("aborted")
+        if self.state in {RunState.RUNNING, RunState.PAUSED}:
+            self._close_current_scopes("aborted")
+        protocol_started = self.state != RunState.READY
         self.state = RunState.ABORTED
-        self._emit(EventType.SESSION_ABORTED, context, source)
+        self._emit(
+            EventType.SESSION_ABORTED,
+            context,
+            source,
+            payload={"protocol_started": protocol_started},
+        )
 
     def fail(self, reason: str) -> None:
         if self.state in TERMINAL_STATES:

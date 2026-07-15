@@ -31,6 +31,7 @@ from imagined_speech.session import SessionValidationReport, SessionWriter, vali
 class SessionRuntimeState(StrEnum):
     CREATED = "created"
     CONNECTING = "connecting"
+    READY = "ready"
     PRE_ROLL = "pre_roll"
     RUNNING = "running"
     POST_ROLL = "post_roll"
@@ -77,6 +78,7 @@ class SessionRuntime:
         self.error: str | None = None
         self._roll_deadline: float | None = None
         self._finalized = False
+        self._protocol_started = False
 
     @property
     def session_path(self) -> Path:
@@ -86,16 +88,17 @@ class SessionRuntime:
     def recording(self) -> bool:
         return self.acquisition.running
 
+    @property
+    def protocol_started(self) -> bool:
+        return self._protocol_started
+
     def start(self) -> None:
         if self.state != SessionRuntimeState.CREATED:
             raise RuntimeError(f"cannot start runtime from {self.state.value}")
         self.state = SessionRuntimeState.CONNECTING
         try:
             self.acquisition.start()
-            self.state = SessionRuntimeState.PRE_ROLL
-            self._roll_deadline = (
-                self.clock.monotonic() + self.resolved.device.pre_roll_seconds
-            )
+            self.state = SessionRuntimeState.READY
         except Exception as exc:
             self.error = str(exc)
             self.engine.fail(str(exc))
@@ -103,7 +106,27 @@ class SessionRuntime:
             self.state = SessionRuntimeState.FAILED
             raise
 
+    def start_protocol(self) -> None:
+        """Begin configured pre-roll exactly once after recording is active."""
+        if self.state != SessionRuntimeState.READY:
+            raise RuntimeError(f"cannot start protocol from {self.state.value}")
+        if self._protocol_started:
+            raise RuntimeError("protocol has already been started")
+        self._protocol_started = True
+        self.state = SessionRuntimeState.PRE_ROLL
+        self._roll_deadline = (
+            self.clock.monotonic() + self.resolved.device.pre_roll_seconds
+        )
+
     def tick(self) -> None:
+        if (
+            self.state in {SessionRuntimeState.READY, SessionRuntimeState.PRE_ROLL}
+            and self.engine.state in TERMINAL_STATES
+        ):
+            self.state = SessionRuntimeState.POST_ROLL
+            self._roll_deadline = (
+                self.clock.monotonic() + self.resolved.device.post_roll_seconds
+            )
         if self.state == SessionRuntimeState.PRE_ROLL:
             assert self._roll_deadline is not None
             if self.clock.monotonic() >= self._roll_deadline:
@@ -146,7 +169,9 @@ class SessionRuntime:
         reason = f"{command.value} accepted"
         try:
             event_source = EventSource.EXPERIMENTER_UI
-            if command == OperatorCommand.PAUSE:
+            if command == OperatorCommand.START_PROTOCOL:
+                self.start_protocol()
+            elif command == OperatorCommand.PAUSE:
                 self.engine.pause(event_source)
             elif command == OperatorCommand.RESUME:
                 self.engine.resume(event_source)
@@ -190,7 +215,7 @@ class SessionRuntime:
     def close(self) -> None:
         if self._finalized:
             return
-        if self.engine.state in {RunState.RUNNING, RunState.PAUSED}:
+        if self.engine.state in {RunState.READY, RunState.RUNNING, RunState.PAUSED}:
             self.execute(
                 OperatorCommand.ABORT,
                 note="Experimenter application closed",

@@ -6,6 +6,11 @@ This roadmap describes the complete implementation of
 [`experiment-plan.md`](experiment-plan.md) as a sequence of runnable,
 evidence-producing milestones rather than small technical chunks.
 
+Post-Milestone-4 desktop lifecycle, persistence, control-state, and multipane
+workspace work is implemented as specified in the
+[`experimenter-desktop-roadmap.md`](experimenter-desktop-roadmap.md)
+follow-up roadmap.
+
 Every milestone must leave the application usable and must preserve the
 central invariant: raw EEG and previously recorded events are append-only and
 never modified by QC or recovery actions.

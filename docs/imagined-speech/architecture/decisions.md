@@ -1,7 +1,7 @@
 # Architecture Decision Record
 
 This is a consolidated record of significant decisions implemented through
-roadmap Milestones 1–3. Each entry states the decision, why it was made, and
+roadmap Milestones 1–4 and the desktop follow-up. Each entry states the decision, why it was made, and
 its consequences. It is descriptive of current code; future changes should
 append or supersede decisions rather than silently rewriting their history.
 
@@ -336,6 +336,57 @@ CSV, block acquisition, or let GUI code touch source buffers.
 **Consequences.** Monitoring has bounded memory and can lag the source by the
 writer queue. Its `receiving/flat/no data` labels are operational indicators,
 not signal-quality results; QC remains Milestone 5.
+
+## AD-028 — Separate recording start from protocol start
+
+**Decision.** Connection starts acquisition/raw writing and then opens the
+passive subject UI, while protocol execution waits for an explicit audited
+Start protocol command.
+
+**Rationale.** The experimenter needs to position the participant display and
+settle the participant without connection timing implicitly starting stimuli.
+
+**Consequences.** The recording-ready interval is unbounded and remains in raw
+data. Runtime—not button state—enforces at-most-once start. Abort-before-start
+is a valid package with an explicit not-started terminal payload.
+
+## AD-029 — Keep the desktop shell and dispose each session graph
+
+**Decision.** One application-scoped window creates a fresh session runtime
+graph per recording and retains only an immutable validation summary in review.
+
+**Rationale.** Consecutive recordings must not require process restart or leak
+callbacks, displays, samples, or writer state into one another.
+
+**Consequences.** Returning to setup clears projections and releases runtime
+references. Session generations reject stale connection results, and every new
+recording has a new UUID and directory.
+
+## AD-030 — Version setup and workspace preferences independently
+
+**Decision.** Store non-scientific desktop preferences through injectable
+per-user `QSettings`/INI storage with separate setup and workspace schemas.
+
+**Rationale.** Preferences do not belong in read-only package resources or
+scientific session artifacts, and layout evolution must not erase valid setup.
+
+**Consequences.** Paths and display identities are revalidated, audio readiness
+is context-bound, corrupt workspace fields fall back locally, and tests never
+touch the OS user profile.
+
+## AD-031 — Use nested splitters and pane-local view factories
+
+**Decision.** Preserve the existing outer experimenter layout and replace only
+the center dashboard with eight registered nested-`QSplitter` layouts. Each
+stable pane slot selects a view created by `MonitoringPanelRegistry`.
+
+**Rationale.** This provides predictable in-window resizing and flexible view
+assignment without floating/docking controls or coupling layouts to future QC.
+
+**Consequences.** Pane assignments and splitter-path sizes persist across
+layout changes and launches. Replaced projections are disposed safely. Hidden
+views stop rendering while acquisition, recording, events, command auditing,
+and health accounting remain active.
 
 ## Deferred decisions
 

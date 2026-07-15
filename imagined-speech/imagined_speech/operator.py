@@ -10,6 +10,7 @@ from imagined_speech.config import StrictModel
 
 
 class OperatorCommand(StrEnum):
+    START_PROTOCOL = "start_protocol"
     PAUSE = "pause"
     RESUME = "resume"
     REPEAT_TRIAL = "repeat_trial"

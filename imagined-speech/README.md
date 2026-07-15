@@ -22,7 +22,10 @@ the decisions made through Milestone 4:
 
 The broader design is described in the
 [experiment plan](../docs/imagined-speech/experiment-plan.md) and
-[implementation roadmap](../docs/imagined-speech/roadmap.md).
+[implementation roadmap](../docs/imagined-speech/roadmap.md). Implemented
+desktop lifecycle, settings, control-state, and configurable center-workspace
+work is described in the
+[experimenter desktop follow-up roadmap](../docs/imagined-speech/experimenter-desktop-roadmap.md).
 
 ## Setup
 
@@ -63,12 +66,20 @@ and device paths are resolved relative to the YAML file that contains them.
 package including deterministic synthetic EEG. Use `--clock real` for
 wall-clock execution.
 
-`run` opens the experimenter application. Its setup page selects participant
-and session identifiers, protocol/device profiles, random seed, output path,
-montage, displays, and audio readiness. Starting a session opens the separate
-subject display and provides live EEG traces, channel reception, markers,
-recording/storage health, pause/resume, trial/block repeat, refit notes, and
-controlled abort. Accepted and rejected commands are persisted.
+`run` opens the experimenter application. **Connect and start recording**
+connects the selected source, starts raw recording, and opens the passive
+subject display without starting the protocol. The experimenter can position
+or maximize that window and then use **Start protocol** to begin pre-roll.
+After finalization, **Back to setup / New session** creates another independent
+recording without restarting the app.
+
+The fixed experimenter header and controls surround a configurable monitoring
+workspace with eight nested-splitter layouts. Each pane independently selects
+Live EEG, Channel reception, Recent protocol markers, Operator command audit,
+or Acquisition and storage health. The Layout picker changes topology and
+**Reset monitoring layout** restores the four-pane default. Setup values,
+window geometry, layout, pane assignments, and splitter sizes persist in the
+per-user `experimenter_ui.ini`; they are never included in session packages.
 
 `run-subject` retains the direct subject-only runner. Use `--clock virtual
 --windowed` for fast visual development. Press Escape to abort a subject run

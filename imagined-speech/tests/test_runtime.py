@@ -2,6 +2,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from imagined_speech.cli import default_config_path
 from imagined_speech.config import load_experiment
 from imagined_speech.engine import ProtocolEngine, RunState, VirtualClock
@@ -23,6 +25,8 @@ def test_runtime_records_accepted_and_rejected_commands(tmp_path: Path) -> None:
         clock=clock,
     )
     runtime.start()
+    assert runtime.state == SessionRuntimeState.READY
+    runtime.start_protocol()
     clock.advance(resolved.device.pre_roll_seconds)
     runtime.acquisition.capture_available()
     runtime.tick()
@@ -114,3 +118,48 @@ def test_acquisition_snapshot_exposes_recent_raw_copy(tmp_path: Path) -> None:
     assert len(snapshot.recent_samples) == 50
     assert snapshot.channel_names[-1] == "marker"
     runtime.close()
+
+
+def test_recording_waits_for_explicit_protocol_start(tmp_path: Path) -> None:
+    resolved = load_experiment(default_config_path())
+    clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    runtime = SessionRuntime(resolved, "READY001", output_root=tmp_path, clock=clock)
+    runtime.start()
+    clock.advance(5)
+    runtime.acquisition.capture_available()
+    runtime.acquisition.flush_pending()
+    runtime.tick()
+
+    assert runtime.state == SessionRuntimeState.READY
+    assert runtime.engine.state == RunState.READY
+    assert runtime.acquisition_snapshot().sample_count > 0
+
+    accepted = runtime.execute(OperatorCommand.START_PROTOCOL)
+    rejected = runtime.execute(OperatorCommand.START_PROTOCOL)
+    assert accepted.status == OperatorCommandStatus.ACCEPTED
+    assert rejected.status == OperatorCommandStatus.REJECTED
+    assert runtime.state == SessionRuntimeState.PRE_ROLL
+    runtime.close()
+
+
+def test_abort_before_protocol_start_is_valid_and_explicit(tmp_path: Path) -> None:
+    resolved = load_experiment(default_config_path())
+    clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    runtime = SessionRuntime(resolved, "READYABORT", output_root=tmp_path, clock=clock)
+    runtime.start()
+    clock.advance(1)
+    runtime.acquisition.capture_available()
+    runtime.acquisition.flush_pending()
+
+    record = runtime.execute(OperatorCommand.ABORT)
+    runtime.tick()
+    clock.advance(resolved.device.post_roll_seconds)
+    runtime.tick()
+
+    assert record.status == OperatorCommandStatus.ACCEPTED
+    assert not runtime.protocol_started
+    assert runtime.state == SessionRuntimeState.FINALIZED
+    assert validate_session(runtime.session_path).status == "aborted"
+    event = runtime.event_memory.events[-1]
+    assert event.event_type == EventType.SESSION_ABORTED
+    assert event.payload["protocol_started"] is False
