@@ -151,10 +151,12 @@ what the next phase is.
    `subject_ui`; it does not simply terminate the application and lose the
    semantic event.
 
-`run_subject_window` validates the selected display index, places the window on
-that screen, and chooses full-screen or 1024×720 windowed mode. The Qt event
-loop is still the UI thread, while acquisition reads and raw disk writes remain
-off that thread.
+`run_subject_window` validates the selected display index and applies the same
+`FULL_SCREEN`, `PREVIOUS_POSITION`, `TOP_LEFT`, or `CENTER` placement policy as
+the experimenter workflow. `--windowed` explicitly selects `CENTER`. Geometry
+is display-relative, clamped to the available area, and persisted when the
+window closes. The Qt event loop is still the UI thread, while acquisition
+reads and raw disk writes remain off that thread.
 
 ## Current limitations and extension points
 

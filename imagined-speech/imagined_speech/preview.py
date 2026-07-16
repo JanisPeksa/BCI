@@ -42,6 +42,7 @@ def render_preview(resolved: ResolvedExperiment) -> str:
         f"{format_duration(config.protocol.inter_block_break_seconds)}",
         f"Initial/final rest: {format_duration(config.protocol.initial_rest_seconds)} / "
         f"{format_duration(config.protocol.final_rest_seconds)}",
+        f"Subject window mode: {config.presentation.window_mode.value}",
         f"Audio: {audio_state} ({audio_assets} configured assets)",
         f"Images: {image_assets} configured assets",
         f"Projected duration: {format_duration(config.projected_duration_seconds)}",

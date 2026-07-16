@@ -181,7 +181,6 @@ Use namespaced, versioned values rather than serializing widgets directly:
 | `setup/device_path` | Last device/montage profile YAML |
 | `setup/output_root` | Last session output directory |
 | `setup/random_seed` | Last selected seed |
-| `setup/experimenter_screen` | Stable display identity with index fallback |
 | `setup/subject_screen` | Stable display identity with index fallback |
 | `setup/audio_ready` | Last audio-readiness confirmation |
 | `setup/audio_context` | Config/device identity for that confirmation |
@@ -192,6 +191,12 @@ matches. Changing protocol or device invalidates the saved confirmation.
 Section 4.4 adds namespaced `workspace/*` values for the center layout. Setup
 and workspace schemas are versioned separately so a layout migration cannot
 discard valid experiment setup.
+
+Window placement is independent of setup reset. `window/geometry` stores the
+long-lived experimenter shell. Versioned `window/subject_placements` records
+normal geometry and window state separately for each stable subject-display
+identity. The obsolete `setup/experimenter_screen` is ignored and retained only
+as a legacy cleanup key.
 
 ### Loading and saving rules
 
@@ -214,7 +219,7 @@ discard valid experiment setup.
 - Change all setup fields, close, reopen, and observe the last valid values.
 - Invalid config/device paths fall back with an actionable warning.
 - Changing config/device clears restored audio readiness.
-- Screen restoration uses display identity when indexes change and otherwise
+- Subject-screen restoration uses display identity when indexes change and otherwise
   falls back to an available display.
 - Tests cover round-trip, missing/corrupt values, version mismatch, migration,
   reset, and isolation from real user settings.
@@ -405,13 +410,16 @@ Run the complete workflow after all four implementation increments:
 1. Launch with no settings and verify bundled setup and center-layout defaults.
 2. Configure a synthetic recording and connect it.
 3. Verify raw samples are written while the protocol remains idle and the
-   subject window can be positioned and maximized.
+   subject window opens according to `window_mode`, can be positioned and
+   maximized, and does not relocate the experimenter shell.
 4. Change monitoring layouts, pane assignments, and splitter sizes while
    recording remains active.
 5. Explicitly start and complete the protocol.
 6. Return from review to setup and run another session with changed identity,
    seed, and output location.
-7. Close and relaunch; verify setup and multipane workspace restoration.
+7. Use `PREVIOUS_POSITION`, close and relaunch, and verify setup, experimenter
+   geometry, per-display subject placement/state, and multipane workspace
+   restoration.
 8. Abort once before protocol start, then exercise pause/resume/repeat/refit and
    abort during another protocol; verify button state and appearance.
 9. Validate all session packages and confirm desktop preferences do not appear
@@ -421,10 +429,10 @@ Run the complete workflow after all four implementation increments:
 
 **Complete when:** a researcher can repeatedly configure, record, prepare the
 subject display, explicitly start a protocol, review, and begin another session
-from one desktop process; setup and center workspace survive relaunch; terminal
-controls are unambiguously disabled; and future QC views can be added through
-the panel registry without changing acquisition contracts or the fixed outer
-layout.
+from one desktop process; setup, both window placements, and center workspace
+survive relaunch; terminal controls are unambiguously disabled; and future QC
+views can be added through the panel registry without changing acquisition
+contracts or the fixed outer layout.
 
 ## Non-goals
 

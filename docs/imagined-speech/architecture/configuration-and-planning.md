@@ -45,7 +45,8 @@ experiment/device/session contracts.
 - phase definitions: positive duration and instruction for each phase required
   by the selected profile;
 - stimuli: stable ID, display label, and optional image/audio paths;
-- presentation: full-screen/display selection, countdown/progress, audio;
+- presentation: subject-window mode/display selection, countdown/progress,
+  audio;
 - markers: fixed semantic event codes plus a contiguous stimulus code base;
 - QC configuration: currently persisted but not executed;
 - output root and a path to the separate device profile.
@@ -60,6 +61,22 @@ experiment/device/session contracts.
 
 Keeping device details separate lets the same protocol run against synthetic,
 replay, LSL, or eventual Cyton input without editing trial design.
+
+### Subject window mode
+
+`presentation.window_mode` is a strict enum that determines how the subject
+window opens on its selected display:
+
+| Value | Opening behavior |
+|---|---|
+| `FULL_SCREEN` | Ignore saved placement and fill the selected display |
+| `PREVIOUS_POSITION` | Restore that display's saved geometry and normal/maximized/full-screen state; otherwise center |
+| `TOP_LEFT` | Ignore saved placement and open a bounded 1024x720 window at the available top-left |
+| `CENTER` | Ignore saved placement and open a bounded 1024x720 centered window |
+
+Every close still captures the current placement, regardless of opening mode.
+The obsolete `full_screen` boolean is not accepted: strict validation requires
+all configurations to use `window_mode`.
 
 ## Cross-field validation
 

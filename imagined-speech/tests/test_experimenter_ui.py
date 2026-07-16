@@ -45,6 +45,8 @@ def test_setup_loads_without_session_and_outer_controls_stay_fixed(tmp_path) -> 
     assert "F3" in window.montage_label.text()
     assert window.participant_edit.text() == "UI001"
     assert window.workspace.current_layout_id == DEFAULT_LAYOUT_ID
+    assert not hasattr(window, "experiment_screen_combo")
+    assert window.subject_screen_combo.count() == len(app.screens())
 
     window._set_workflow_state(ExperimenterWorkflowState.CONNECTING)
     window.resize(1400, 800)
@@ -182,6 +184,7 @@ def test_two_sequential_recordings_and_workspace_changes_do_not_restart_source(
         settings_store=ExperimenterSettingsStore(tmp_path / "ui.ini"),
     )
     window.show()
+    original_position = window.pos()
     window._start_session()
     deadline = time.monotonic() + 2
     while window.workflow_state != ExperimenterWorkflowState.READY:
@@ -194,6 +197,7 @@ def test_two_sequential_recordings_and_workspace_changes_do_not_restart_source(
     assert first.state == SessionRuntimeState.READY
     assert first.recording and first.engine.state.value == "ready"
     assert window.subject_window is not None
+    assert window.pos() == original_position
     assert window.start_protocol_button.isEnabled()
     assert window.command_buttons[OperatorCommand.ABORT].isEnabled()
     assert not window.command_buttons[OperatorCommand.PAUSE].isEnabled()

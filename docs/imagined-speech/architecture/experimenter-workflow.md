@@ -44,7 +44,8 @@ The setup page makes run-time choices without editing source code:
 - experiment/protocol YAML and device-profile YAML;
 - random seed override;
 - output directory;
-- experimenter and subject displays;
+- subject display (the experimenter window retains its current desktop
+  placement);
 - resolved montage, reference, and ground;
 - explicit audio-readiness confirmation when audio is enabled.
 
@@ -52,7 +53,7 @@ Loading configuration uses the same strict loader as headless commands. Device
 and seed overrides are revalidated into a new `ExperimentConfig` and
 `ResolvedExperiment`, so planning and snapshots see the selected values.
 Preview shows protocol, duration, block/trial balance, device, montage, phases,
-assets, and selected seed. Warnings call out a single/same display, unconfirmed
+assets, and selected seed. Warnings call out a single display, unconfirmed
 audio, LSL producer requirements, and Cyton hardware requirements.
 
 The generated UUID remains the globally unique session ID. The optional
@@ -103,6 +104,22 @@ After source connection succeeds, the experimenter application creates
 and `drive_engine=False`. The runtime/experimenter timer owns engine ticks; the
 subject timer only renders fresh `ViewState`. This removes the possibility of
 two GUI timers advancing the same protocol.
+
+The experimenter shell is the same `QMainWindow` used for setup, live
+monitoring, review, and the next session. Opening the subject window never
+assigns or moves that shell to another display. Its Qt geometry is restored at
+application startup and saved on clean close.
+
+`SubjectWindowPlacementController` assigns the configured subject display and
+applies `presentation.window_mode`. Saved normal geometry is relative to that
+display's available area and is clamped after resolution or taskbar changes.
+For full-screen presentation, both the widget geometry and native window
+position are anchored to the selected screen's full geometry before and after
+the full-screen transition.
+Placements are independent per stable display identity and include normal,
+maximized, or full-screen state. Only `PREVIOUS_POSITION` restores them;
+missing placement falls back to `CENTER`. All modes capture the latest
+placement when the subject window closes.
 
 The subject window receives only the engine presentation model and resolved
 stimulus assets. It has no reference to acquisition snapshots, marker tables,
@@ -185,16 +202,19 @@ reopened.
 
 `ExperimenterSettingsStore` wraps Qt `QSettings` in INI mode. Production uses
 the platform's per-user application configuration location and the filename
-`experimenter_ui.ini`; tests inject temporary files. Setup and workspace use
-independent schema versions, so an invalid future workspace version resets
-only the center layout rather than discarding valid experiment setup.
+`experimenter_ui.ini`; tests inject temporary files. Setup, workspace, and
+subject placement use independent schema versions, so an invalid future layout
+or placement version falls back locally rather than discarding valid experiment
+setup.
 
 The setup namespace stores only last-valid participant/session fields,
-config/device paths, output root, seed, stable display identity with index
+config/device paths, output root, seed, the subject display identity with index
 fallback, and audio readiness bound to its config/device context. Workspace
 keys store layout ID, stable pane-slot assignments, and sizes by stable
-splitter path. Main-window geometry is separate. Runtime state, commands,
-samples, secrets, and scientific artifacts are never preferences.
+splitter path. Main-window geometry and versioned per-display subject placements
+are separate. Runtime state, commands, samples, secrets, and scientific
+artifacts are never preferences. The obsolete `setup/experimenter_screen`
+value is ignored for compatibility and removed by **Reset saved setup**.
 
 ## Splitter-based monitoring workspace
 

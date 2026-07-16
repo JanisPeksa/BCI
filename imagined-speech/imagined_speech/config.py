@@ -32,6 +32,13 @@ class Phase(StrEnum):
     SPEAKING = "speaking"
 
 
+class SubjectWindowMode(StrEnum):
+    FULL_SCREEN = "FULL_SCREEN"
+    PREVIOUS_POSITION = "PREVIOUS_POSITION"
+    TOP_LEFT = "TOP_LEFT"
+    CENTER = "CENTER"
+
+
 PHASE_SEQUENCES: dict[ProtocolProfile, tuple[Phase, ...]] = {
     ProtocolProfile.IMAGINED_ONLY: (
         Phase.REST,
@@ -89,7 +96,7 @@ class AudioConfig(StrictModel):
 
 
 class PresentationConfig(StrictModel):
-    full_screen: bool = True
+    window_mode: SubjectWindowMode = SubjectWindowMode.FULL_SCREEN
     subject_screen: int = Field(default=1, ge=0)
     show_countdown: bool = True
     show_progress: bool = True

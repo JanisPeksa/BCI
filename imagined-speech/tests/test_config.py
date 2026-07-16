@@ -8,6 +8,8 @@ from imagined_speech.cli import default_config_path, main
 from imagined_speech.config import (
     ConfigurationError,
     Phase,
+    PresentationConfig,
+    SubjectWindowMode,
     load_device_profile,
     load_experiment,
 )
@@ -40,9 +42,16 @@ def test_smoke_profile_is_hardware_and_asset_independent() -> None:
     resolved = load_experiment(default_config_path())
 
     assert resolved.device.backend == "synthetic"
+    assert resolved.config.presentation.window_mode == SubjectWindowMode.FULL_SCREEN
     assert resolved.config.presentation.audio.enabled is False
     assert all(not assets for assets in resolved.assets.values())
     assert format_duration(resolved.config.projected_duration_seconds) == "00:00:14"
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_legacy_full_screen_configuration_is_rejected(value: bool) -> None:
+    with pytest.raises(ValueError, match="full_screen"):
+        PresentationConfig.model_validate({"full_screen": value})
 
 
 @pytest.mark.parametrize(
@@ -92,5 +101,6 @@ def test_preview_command_uses_smoke_profile(capsys: pytest.CaptureFixture[str]) 
 
     output = capsys.readouterr().out
     assert "Imagined Speech Smoke Test" in output
+    assert "Subject window mode: FULL_SCREEN" in output
     assert "Projected duration: 00:00:14" in output
     assert "cyton_8ch_synthetic" in output

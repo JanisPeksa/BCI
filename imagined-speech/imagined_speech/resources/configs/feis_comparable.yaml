@@ -35,7 +35,7 @@ stimuli:
   - {id: ae, label: /æ/}
   - {id: open_o, label: /ɔ/}
 presentation:
-  full_screen: true
+  window_mode: FULL_SCREEN
   subject_screen: 1
   show_countdown: true
   show_progress: true

@@ -21,7 +21,7 @@ stimuli:
   - {id: p, label: /p/}
   - {id: i, label: /i/}
 presentation:
-  full_screen: false
+  window_mode: PREVIOUS_POSITION
   subject_screen: 0
   show_countdown: true
   show_progress: true

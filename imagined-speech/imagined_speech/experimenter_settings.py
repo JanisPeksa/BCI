@@ -10,6 +10,7 @@ from PyQt6.QtCore import QByteArray, QSettings, QStandardPaths
 
 SETUP_SCHEMA_VERSION = 1
 WORKSPACE_SCHEMA_VERSION = 1
+WINDOW_PLACEMENT_SCHEMA_VERSION = 1
 
 
 class ExperimenterSettingsStore:
@@ -82,4 +83,3 @@ class ExperimenterSettingsStore:
 
     def sync(self) -> None:
         self._settings.sync()
-

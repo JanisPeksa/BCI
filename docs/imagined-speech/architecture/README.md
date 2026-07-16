@@ -43,6 +43,7 @@ recording, and session validation.
 | Clock-driven state machine | [`engine.py`](../../../imagined-speech/imagined_speech/engine.py) |
 | Headless execution | [`simulation.py`](../../../imagined-speech/imagined_speech/simulation.py) |
 | Subject-facing Qt UI | [`subject_ui.py`](../../../imagined-speech/imagined_speech/subject_ui.py) |
+| Per-display subject-window placement | [`window_placement.py`](../../../imagined-speech/imagined_speech/window_placement.py) |
 | Session runtime/controller | [`runtime.py`](../../../imagined-speech/imagined_speech/runtime.py) |
 | Experimenter-facing Qt UI | [`experimenter_ui.py`](../../../imagined-speech/imagined_speech/experimenter_ui.py) |
 | Operator command contract | [`operator.py`](../../../imagined-speech/imagined_speech/operator.py) |

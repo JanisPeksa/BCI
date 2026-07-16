@@ -388,6 +388,26 @@ layout changes and launches. Replaced projections are disposed safely. Hidden
 views stop rendering while acquisition, recording, events, command auditing,
 and health accounting remain active.
 
+## AD-032 — Let configuration select subject-window restoration policy
+
+**Decision.** Keep the experimenter shell on its researcher-controlled desktop
+geometry and expose only subject-display selection. Replace the presentation
+boolean with `window_mode`: `FULL_SCREEN`, `PREVIOUS_POSITION`, `TOP_LEFT`, or
+`CENTER`. Capture subject geometry and state per display after every run, but
+restore it only when configuration requests `PREVIOUS_POSITION`.
+
+**Rationale.** The experimenter UI is one long-lived window, so moving it again
+when a session connects destroys researcher placement. The subject window is
+session-scoped and must be recreated, so its placement requires explicit
+persistence. Keeping opening policy in YAML makes presentation behavior
+deliberate while still allowing a reusable desktop layout.
+
+**Consequences.** Main-window geometry survives process restarts without a
+display selector. Subject positions are stored outside scientific packages,
+relative to stable display identities, and clamped when monitor geometry
+changes. The obsolete `full_screen` boolean is rejected by strict configuration
+validation.
+
 ## Deferred decisions
 
 The following remain open because their modules are not implemented: the QC

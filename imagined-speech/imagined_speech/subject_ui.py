@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QTimer, Qt, QUrl
+from PyQt6.QtCore import QTimer, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QKeyEvent, QPixmap, QResizeEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
-from imagined_speech.config import Phase, ResolvedExperiment
+from imagined_speech.config import Phase, ResolvedExperiment, SubjectWindowMode
 from imagined_speech.engine import (
     ProtocolEngine,
     RunState,
@@ -17,9 +17,13 @@ from imagined_speech.engine import (
     VirtualClock,
 )
 from imagined_speech.events import EventSource
+from imagined_speech.experimenter_settings import ExperimenterSettingsStore
+from imagined_speech.window_placement import SubjectWindowPlacementController
 
 
 class SubjectWindow(QWidget):
+    aboutToClose = pyqtSignal()
+
     def __init__(
         self,
         engine: ProtocolEngine,
@@ -178,6 +182,7 @@ class SubjectWindow(QWidget):
         super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.aboutToClose.emit()
         if self.engine.state in {RunState.RUNNING, RunState.PAUSED}:
             self.engine.abort(EventSource.SUBJECT_UI)
         self.timer.stop()
@@ -191,6 +196,7 @@ def run_subject_window(
     *,
     windowed: bool = False,
     screen_index: int | None = None,
+    settings_store: ExperimenterSettingsStore | None = None,
 ) -> int:
     app = QApplication.instance() or QApplication([])
     screens = app.screens()
@@ -199,21 +205,25 @@ def run_subject_window(
         if screen_index is None
         else screen_index
     )
-    if selected_index >= len(screens):
+    if selected_index < 0 or selected_index >= len(screens):
         raise ValueError(
             f"subject screen {selected_index} is unavailable; detected {len(screens)} screen(s)"
         )
 
     window = SubjectWindow(engine, resolved)
     screen = screens[selected_index]
-    window.setGeometry(screen.geometry())
-    if windowed or not resolved.config.presentation.full_screen:
-        window.resize(1024, 720)
-        window.show()
-    else:
-        window.winId()
-        window_handle = window.windowHandle()
-        if window_handle is not None:
-            window_handle.setScreen(screen)
-        window.showFullScreen()
+    placement = SubjectWindowPlacementController(
+        settings_store or ExperimenterSettingsStore()
+    )
+    window.aboutToClose.connect(
+        lambda: placement.capture_window(window, screen, selected_index)
+    )
+    placement.open_window(
+        window,
+        screen,
+        selected_index,
+        SubjectWindowMode.CENTER
+        if windowed
+        else resolved.config.presentation.window_mode,
+    )
     return app.exec()

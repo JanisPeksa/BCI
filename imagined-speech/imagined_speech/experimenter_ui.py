@@ -64,6 +64,7 @@ from imagined_speech.operator import OperatorCommand, OperatorCommandStatus
 from imagined_speech.preview import render_preview
 from imagined_speech.runtime import SessionRuntime, SessionRuntimeState
 from imagined_speech.subject_ui import SubjectWindow
+from imagined_speech.window_placement import SubjectWindowPlacementController
 
 
 class ExperimenterWorkflowState(StrEnum):
@@ -148,6 +149,7 @@ class ExperimenterWindow(QMainWindow):
         self.setWindowTitle("Imagined Speech - Experimenter")
         self.resize(1440, 900)
         self.settings = settings_store or ExperimenterSettingsStore()
+        self.subject_placement = SubjectWindowPlacementController(self.settings)
         self.workflow_state = ExperimenterWorkflowState.SETUP
         self.runtime: SessionRuntime | None = None
         self.review_summary: SessionReviewSummary | None = None
@@ -256,19 +258,16 @@ class ExperimenterWindow(QMainWindow):
         output_row.addWidget(output_browse)
         self.seed_spin = QSpinBox()
         self.seed_spin.setRange(0, 2_147_483_647)
-        self.experiment_screen_combo = QComboBox()
         self.subject_screen_combo = QComboBox()
         for index, screen in enumerate(QApplication.screens()):
             size = screen.size()
             label = f"{index}: {screen.name()} ({size.width()}x{size.height()})"
-            self.experiment_screen_combo.addItem(label, index)
             self.subject_screen_combo.addItem(label, index)
         if self.subject_screen_combo.count() > 1:
             self.subject_screen_combo.setCurrentIndex(1)
         self.audio_ready = QCheckBox("Audio output and volume checked")
         self.montage_label = QLabel("-")
         self.montage_label.setWordWrap(True)
-        self.experiment_screen_combo.currentIndexChanged.connect(self._refresh_preview)
         self.subject_screen_combo.currentIndexChanged.connect(self._refresh_preview)
         self.audio_ready.stateChanged.connect(self._audio_readiness_changed)
         self.seed_spin.valueChanged.connect(self._refresh_preview)
@@ -280,7 +279,6 @@ class ExperimenterWindow(QMainWindow):
         form.addRow("Device profile", device_row)
         form.addRow("Random seed", self.seed_spin)
         form.addRow("Output directory", output_row)
-        form.addRow("Experimenter display", self.experiment_screen_combo)
         form.addRow("Subject display", self.subject_screen_combo)
         form.addRow("Montage", self.montage_label)
         form.addRow("Audio readiness", self.audio_ready)
@@ -468,8 +466,6 @@ class ExperimenterWindow(QMainWindow):
             warnings = [item for item in (self._settings_warning, self._workspace_warning) if item]
             if self.subject_screen_combo.count() < 2:
                 warnings.append("Only one display detected; subject and experimenter views will share it.")
-            if self.subject_screen_combo.currentData() == self.experiment_screen_combo.currentData():
-                warnings.append("Experimenter and subject displays currently select the same screen.")
             if resolved.config.presentation.audio.enabled and not self.audio_ready.isChecked():
                 warnings.append("Audio is enabled but readiness has not been confirmed.")
             if resolved.device.backend == "lsl":
@@ -566,29 +562,24 @@ class ExperimenterWindow(QMainWindow):
         if self.subject_window is not None:
             return
         resolved = runtime.resolved
-        self.subject_window = SubjectWindow(
+        subject_window = SubjectWindow(
             runtime.engine, resolved, auto_start=False, drive_engine=False
         )
+        self.subject_window = subject_window
         screens = QApplication.screens()
         subject_index = min(int(self.subject_screen_combo.currentData() or 0), len(screens) - 1)
         subject_screen = screens[subject_index]
-        self.subject_window.setGeometry(subject_screen.geometry())
-        if resolved.config.presentation.full_screen:
-            self.subject_window.winId()
-            handle = self.subject_window.windowHandle()
-            if handle is not None:
-                handle.setScreen(subject_screen)
-            self.subject_window.showFullScreen()
-        else:
-            self.subject_window.resize(1024, 720)
-            self.subject_window.show()
-        experimenter_index = min(
-            int(self.experiment_screen_combo.currentData() or 0), len(screens) - 1
+        subject_window.aboutToClose.connect(
+            lambda: self.subject_placement.capture_window(
+                subject_window, subject_screen, subject_index
+            )
         )
-        handle = self.windowHandle()
-        if handle is not None:
-            handle.setScreen(screens[experimenter_index])
-        self.move(screens[experimenter_index].geometry().topLeft())
+        self.subject_placement.open_window(
+            subject_window,
+            subject_screen,
+            subject_index,
+            resolved.config.presentation.window_mode,
+        )
 
     def _tick(self) -> None:
         runtime = self.runtime
@@ -888,9 +879,6 @@ class ExperimenterWindow(QMainWindow):
             self._as_int(self.settings.value("setup/random_seed"), self.seed_spin.value())
         )
         self._restore_screen(
-            self.experiment_screen_combo, self.settings.value("setup/experimenter_screen")
-        )
-        self._restore_screen(
             self.subject_screen_combo, self.settings.value("setup/subject_screen")
         )
         saved_context = str(self.settings.value("setup/audio_context", ""))
@@ -919,7 +907,6 @@ class ExperimenterWindow(QMainWindow):
             "setup/device_path": str(Path(self.device_edit.text()).expanduser().resolve()),
             "setup/output_root": self.output_edit.text().strip(),
             "setup/random_seed": self.seed_spin.value(),
-            "setup/experimenter_screen": self._screen_identity(self.experiment_screen_combo),
             "setup/subject_screen": self._screen_identity(self.subject_screen_combo),
             "setup/audio_ready": self.audio_ready.isChecked(),
             "setup/audio_context": self._audio_context_for_confirmation or "",

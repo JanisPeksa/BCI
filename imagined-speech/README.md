@@ -73,12 +73,20 @@ or maximize that window and then use **Start protocol** to begin pre-roll.
 After finalization, **Back to setup / New session** creates another independent
 recording without restarting the app.
 
+Setup selects only the subject display; the long-lived experimenter window is
+never relocated when recording starts. Its geometry survives application
+restarts. Subject geometry and normal/maximized/full-screen state are remembered
+separately for each display. `presentation.window_mode` controls opening:
+`FULL_SCREEN`, `PREVIOUS_POSITION`, `TOP_LEFT`, or `CENTER`; previous placement
+falls back to centered when that display has no saved value. The obsolete
+`full_screen` boolean is rejected; configurations must use `window_mode`.
+
 The fixed experimenter header and controls surround a configurable monitoring
 workspace with eight nested-splitter layouts. Each pane independently selects
 Live EEG, Channel reception, Recent protocol markers, Operator command audit,
 or Acquisition and storage health. The Layout picker changes topology and
 **Reset monitoring layout** restores the four-pane default. Setup values,
-window geometry, layout, pane assignments, and splitter sizes persist in the
+both window placements, layout, pane assignments, and splitter sizes persist in the
 per-user `experimenter_ui.ini`; they are never included in session packages.
 
 `run-subject` retains the direct subject-only runner. Use `--clock virtual
