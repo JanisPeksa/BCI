@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import math
+
+from PySide6.QtCore import Signal, Slot
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+
+from ssvep_bci.runtime.clock import Clock
+from ssvep_bci.runtime.commands import FrameKind, PresentationFrameAcknowledged
+from ssvep_bci.runtime.view_state import ViewState
+
+
+class StimulusRenderer(QOpenGLWidget):
+    command_emitted = Signal(object)
+
+    def __init__(self, clock: Clock, background_color: str, parent=None) -> None:
+        super().__init__(parent)
+        self.clock = clock
+        self.background = QColor(background_color)
+        self._view: ViewState | None = None
+        self._requested_visible = False
+        self._phase_anchor = 0.0
+        self._pending_ack: FrameKind | None = None
+        self._last_painted_on = False
+        self.frameSwapped.connect(self._frame_swapped)
+
+    def set_view_state(self, view: ViewState) -> None:
+        previous = self._view
+        previous_visible = self._requested_visible
+        self._view = view
+        self._requested_visible = bool(view.scene and view.scene.has_visible_nodes)
+        if self._requested_visible and not previous_visible:
+            self._phase_anchor = self.clock.monotonic()
+            self._pending_ack = FrameKind.ONSET
+            self.update()
+        elif not self._requested_visible and previous_visible:
+            self._pending_ack = FrameKind.OFFSET
+            self.update()
+        elif previous is None or previous.step_id != view.step_id:
+            self.update()
+
+    def paintGL(self) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.background)
+        self._last_painted_on = False
+        view = self._view
+        if self._requested_visible and view is not None and view.scene is not None:
+            elapsed = max(0.0, self.clock.monotonic() - self._phase_anchor)
+            for node in sorted(view.scene.nodes, key=lambda item: item.z_order):
+                if not node.visible_requested:
+                    continue
+                stimulus = node.stimulus
+                phase = (
+                    elapsed * stimulus.frequency_hz
+                    + stimulus.phase_offset_radians / (2 * math.pi)
+                ) % 1.0
+                is_on = phase < stimulus.duty_cycle
+                self._last_painted_on = self._last_painted_on or is_on
+                visual = stimulus.visual
+                width = visual.width_px
+                height = visual.height_px
+                center_x = int(self.width() * visual.center_x)
+                center_y = int(self.height() * visual.center_y)
+                rect = (center_x - width // 2, center_y - height // 2, width, height)
+                color = QColor(visual.on_color if is_on else visual.off_color)
+                painter.setPen(color)
+                painter.setBrush(color)
+                if visual.shape.value == "circle":
+                    painter.drawEllipse(*rect)
+                else:
+                    painter.drawRect(*rect)
+        painter.end()
+
+    @Slot()
+    def _frame_swapped(self) -> None:
+        view = self._view
+        if view is None or view.presentation_id is None:
+            return
+        if self._pending_ack == FrameKind.ONSET and self._last_painted_on:
+            now = self.clock.monotonic()
+            self._phase_anchor = now
+            self.command_emitted.emit(PresentationFrameAcknowledged(
+                presentation_id=view.presentation_id,
+                kind=FrameKind.ONSET,
+                monotonic_timestamp=now,
+                wall_clock_timestamp_utc=self.clock.wall_time_utc(),
+            ))
+            self._pending_ack = None
+        elif self._pending_ack == FrameKind.OFFSET and not self._last_painted_on:
+            self.command_emitted.emit(PresentationFrameAcknowledged(
+                presentation_id=view.presentation_id,
+                kind=FrameKind.OFFSET,
+                monotonic_timestamp=self.clock.monotonic(),
+                wall_clock_timestamp_utc=self.clock.wall_time_utc(),
+            ))
+            self._pending_ack = None
+        if self._requested_visible:
+            self.update()
