@@ -16,6 +16,10 @@ def config_fingerprint(config: ExperimentConfig) -> str:
 
 def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
     protocol = config.protocol
+    sequence_length = len(
+        protocol.stimulus_sequence or (protocol.active_stimulus_id,)
+    )
+    ordered_stimuli = config.ordered_stimulus_ids
     steps: list[PlanStep] = []
     if protocol.initial_rest_seconds:
         steps.append(PlanStep(
@@ -23,7 +27,7 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
             kind=StepKind.INITIAL_REST,
             duration_seconds=protocol.initial_rest_seconds,
         ))
-    for number in range(1, protocol.repetitions + 1):
+    for number, stimulus_id in enumerate(ordered_stimuli, start=1):
         trial_id = f"trial-{number:04d}"
         if protocol.pre_stimulus_seconds:
             steps.append(PlanStep(
@@ -32,7 +36,7 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
                 duration_seconds=protocol.pre_stimulus_seconds,
                 trial_id=trial_id,
                 trial_number=number,
-                stimulus_id=protocol.active_stimulus_id,
+                stimulus_id=stimulus_id,
             ))
         steps.append(PlanStep(
             step_id=f"{trial_id}-stimulus",
@@ -40,14 +44,21 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
             duration_seconds=protocol.stimulation_seconds,
             trial_id=trial_id,
             trial_number=number,
-            stimulus_id=protocol.active_stimulus_id,
+            stimulus_id=stimulus_id,
             presentation_id=f"presentation-{number:04d}",
         ))
-        if number < protocol.repetitions and protocol.inter_trial_seconds:
+        if number < len(ordered_stimuli):
+            completed_sequence = number % sequence_length == 0
+            break_seconds = protocol.inter_trial_seconds + (
+                protocol.sequence_break_seconds if completed_sequence else 0.0
+            )
+        else:
+            break_seconds = 0.0
+        if break_seconds:
             steps.append(PlanStep(
                 step_id=f"{trial_id}-inter",
                 kind=StepKind.INTER_TRIAL,
-                duration_seconds=protocol.inter_trial_seconds,
+                duration_seconds=break_seconds,
             ))
     if protocol.final_rest_seconds:
         steps.append(PlanStep(
@@ -61,6 +72,5 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
         config_hash=digest,
         experiment_id=config.experiment_id,
         steps=tuple(steps),
-        trial_count=protocol.repetitions,
+        trial_count=len(ordered_stimuli),
     )
-

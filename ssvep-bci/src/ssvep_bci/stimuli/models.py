@@ -15,6 +15,8 @@ from ssvep_bci.config.models import StimulusConfig, StrictModel
 class StimulusNode(StrictModel):
     stimulus: StimulusConfig
     visible_requested: bool = True
+    flashing_requested: bool = True
+    highlighted: bool = False
     z_order: int = 0
 
 
@@ -25,3 +27,9 @@ class StimulusScene(StrictModel):
     @property
     def has_visible_nodes(self) -> bool:
         return any(node.visible_requested for node in self.nodes)
+
+    @property
+    def has_flashing_nodes(self) -> bool:
+        return any(
+            node.visible_requested and node.flashing_requested for node in self.nodes
+        )

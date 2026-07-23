@@ -172,6 +172,52 @@ ssvep-bci run --config ".\configs\cyton-session.yaml" --participant P012
 ssvep-bci run --config ".\configs\lsl-session.yaml" --participant P012 --windowed
 ```
 
+The repository includes a four-frequency collection profile. It currently uses
+the synthetic device profile for a safe timing/UI dry run; change
+`device_profile` to `../devices/cyton.yaml` in a copied experiment config for a
+real BrainFlow/Cyton recording.
+It mirrors the legacy four-stimulus timing: 8.25, 9.75, 12.75, and 14.25 Hz
+flash simultaneously in a 2×2 grid for each 5-second stimulus period. A
+5-second red outline cues the target to attend before each period. The target
+order is deterministically shuffled in each of five complete sets, followed by
+a 15-second set break. This produces 25 seconds of attended flashing data per
+frequency and approximately 4 minutes 46 seconds of total acquisition time.
+Validate it before connecting the board, then provide the participant ID:
+
+```powershell
+ssvep-bci validate --config ".\src\ssvep_bci\resources\configs\four-frequency-collection.yaml"
+ssvep-bci run --config ".\src\ssvep_bci\resources\configs\four-frequency-collection.yaml" --participant P012 --session-label four-frequency
+```
+
+The profile uses `serial_port: auto`, which requires exactly one detected
+FTDI/OpenBCI serial device. Set the explicit port in a copied device profile
+when more than one serial device is connected. Processing is disabled in this
+collection profile so the session contains continuous raw EEG plus structured
+stimulus onset/offset events for offline analysis.
+
+`protocol.stimulus_sequence` is backward-compatible with the original
+single-stimulus protocol: each listed ID becomes one trial, and
+`protocol.repetitions` repeats the complete sequence. The current UI presents
+the IDs in `protocol.simultaneous_stimulus_ids` together while the current
+sequence item identifies the attended target and marker label.
+`protocol.sequence_break_seconds` adds a break after a complete sequence
+without inserting that long break between individual frequencies.
+
+A second bundled profile presents one centered circle for exactly four minutes
+of stimulus time. Each of the four frequencies is shown 12 times for 5 seconds;
+the order is deterministically randomized within each balanced four-frequency
+block. It includes a 5-second pause before the first presentation and a
+3-second blank interval between presentations, making the complete planned
+protocol 6 minutes 26 seconds:
+
+```powershell
+ssvep-bci validate --config ".\src\ssvep_bci\resources\configs\four-frequency-single-circle-4min.yaml"
+ssvep-bci run --config ".\src\ssvep_bci\resources\configs\four-frequency-single-circle-4min.yaml" --participant P012 --session-label single-circle-4min
+```
+
+This profile uses the synthetic device for dry runs. Change `device_profile` to
+`../devices/cyton.yaml` in a copied config for BrainFlow/Cyton acquisition.
+
 Validate a completed, aborted, failed, or incomplete session folder:
 
 ```powershell

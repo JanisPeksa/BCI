@@ -52,6 +52,7 @@ class ProtocolRuntime:
         self._stimulus_indexes = {
             stimulus.id: index for index, stimulus in enumerate(config.stimuli)
         }
+        self._stimuli_by_id = {stimulus.id: stimulus for stimulus in config.stimuli}
 
     @property
     def current_step(self) -> PlanStep | None:
@@ -171,13 +172,34 @@ class ProtocolRuntime:
 
     def view_state(self) -> ViewState:
         step = self.current_step
-        stimulus = self.config.active_stimulus if step and step.kind == StepKind.STIMULUS else None
-        visible = self.state in {RunState.AWAITING_ONSET, RunState.RUNNING} and stimulus is not None
+        target = (
+            self._stimuli_by_id[step.stimulus_id]
+            if step
+            and step.kind in {StepKind.PRE_STIMULUS, StepKind.STIMULUS}
+            and step.stimulus_id
+            else None
+        )
         scene = None
-        if stimulus is not None and step is not None and step.presentation_id is not None:
+        if target is not None and step is not None:
+            scene_ids = self.config.protocol.simultaneous_stimulus_ids or (target.id,)
+            flashing = (
+                step.kind == StepKind.STIMULUS
+                and self.state in {RunState.AWAITING_ONSET, RunState.RUNNING}
+            )
             scene = StimulusScene(
-                scene_id=step.presentation_id,
-                nodes=(StimulusNode(stimulus=stimulus, visible_requested=visible),),
+                scene_id=step.presentation_id or step.step_id,
+                nodes=tuple(
+                    StimulusNode(
+                        stimulus=self._stimuli_by_id[stimulus_id],
+                        visible_requested=True,
+                        flashing_requested=flashing,
+                        highlighted=(
+                            step.kind == StepKind.PRE_STIMULUS
+                            and stimulus_id == target.id
+                        ),
+                    )
+                    for stimulus_id in scene_ids
+                ),
             )
         phase = step.kind.value if step else self.state.value
         messages = {

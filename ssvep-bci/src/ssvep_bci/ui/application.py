@@ -30,12 +30,19 @@ def run_application(
         raise ValueError(
             f"screen index {screen_index} unavailable; detected {len(screens)} screen(s)"
         )
-    frequency = resolved.config.active_stimulus.frequency_hz
     refresh = screens[screen_index].refreshRate()
-    if refresh > 0 and frequency >= refresh / 2:
-        raise ValueError(
-            f"stimulus frequency {frequency:g} Hz violates Nyquist for {refresh:g} Hz display"
-        )
+    if refresh > 0:
+        invalid = [
+            stimulus for stimulus in resolved.config.stimuli
+            if stimulus.frequency_hz >= refresh / 2
+        ]
+        if invalid:
+            details = ", ".join(
+                f"{stimulus.id}={stimulus.frequency_hz:g} Hz" for stimulus in invalid
+            )
+            raise ValueError(
+                f"stimulus frequencies violate Nyquist for {refresh:g} Hz display: {details}"
+            )
     coordinator = SessionCoordinator(resolved, participant_id, session_label)
     window = SubjectWindow(coordinator, resolved)
     if resolved.config.presentation.hide_cursor:
@@ -48,4 +55,3 @@ def run_application(
         window.showFullScreen()
     window.begin()
     return app.exec()
-

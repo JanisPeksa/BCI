@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
@@ -62,11 +63,15 @@ class StimulusConfig(StrictModel):
 class ProtocolConfig(StrictModel):
     active_stimulus_id: str = Field(pattern=ID_PATTERN)
     repetitions: int = Field(ge=1)
+    stimulus_sequence: tuple[str, ...] | None = Field(default=None, min_length=1)
+    randomize_stimulus_sequence: bool = False
+    simultaneous_stimulus_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
     acquisition_pre_roll_seconds: float = Field(default=1.0, ge=0)
     initial_rest_seconds: float = Field(default=0.0, ge=0)
     pre_stimulus_seconds: float = Field(default=0.0, ge=0)
     stimulation_seconds: float = Field(gt=0)
     inter_trial_seconds: float = Field(default=0.0, ge=0)
+    sequence_break_seconds: float = Field(default=0.0, ge=0)
     final_rest_seconds: float = Field(default=0.0, ge=0)
     acquisition_post_roll_seconds: float = Field(default=1.0, ge=0)
 
@@ -194,12 +199,42 @@ class ExperimentConfig(StrictModel):
             raise ValueError("stimulus frequencies must be unique")
         if self.protocol.active_stimulus_id not in ids:
             raise ValueError("active_stimulus_id does not reference a configured stimulus")
-        active = next(s for s in self.stimuli if s.id == self.protocol.active_stimulus_id)
-        if self.processing.enabled and not any(
-            abs(active.frequency_hz - value) <= 1e-6
-            for value in self.processing.candidate_frequencies_hz
+        sequence = self.protocol.stimulus_sequence
+        if sequence is not None:
+            unknown = sorted(set(sequence) - set(ids))
+            if unknown:
+                raise ValueError(
+                    "stimulus_sequence references unknown stimulus IDs: "
+                    + ", ".join(unknown)
+                )
+        simultaneous = self.protocol.simultaneous_stimulus_ids
+        if simultaneous is not None:
+            if len(set(simultaneous)) != len(simultaneous):
+                raise ValueError("simultaneous_stimulus_ids must be unique")
+            unknown = sorted(set(simultaneous) - set(ids))
+            if unknown:
+                raise ValueError(
+                    "simultaneous_stimulus_ids references unknown stimulus IDs: "
+                    + ", ".join(unknown)
+                )
+        selected_ids = sequence or (self.protocol.active_stimulus_id,)
+        if simultaneous is not None and not set(selected_ids).issubset(simultaneous):
+            raise ValueError(
+                "every stimulus_sequence target must be in simultaneous_stimulus_ids"
+            )
+        if self.protocol.randomize_stimulus_sequence and sequence is None:
+            raise ValueError(
+                "randomize_stimulus_sequence requires stimulus_sequence"
+            )
+        selected = [stimulus for stimulus in self.stimuli if stimulus.id in selected_ids]
+        if self.processing.enabled and not all(
+            any(abs(stimulus.frequency_hz - value) <= 1e-6
+                for value in self.processing.candidate_frequencies_hz)
+            for stimulus in selected
         ):
-            raise ValueError("active stimulus frequency must be a processing candidate")
+            raise ValueError(
+                "every stimulus_sequence frequency must be a processing candidate"
+            )
         analysis_end = (
             self.processing.window.onset_offset_seconds
             + self.processing.window.length_seconds
@@ -231,6 +266,20 @@ class ExperimentConfig(StrictModel):
     @property
     def active_stimulus(self) -> StimulusConfig:
         return next(s for s in self.stimuli if s.id == self.protocol.active_stimulus_id)
+
+    @property
+    def ordered_stimulus_ids(self) -> tuple[str, ...]:
+        """Return the flattened trial order, preserving legacy configs."""
+        sequence = self.protocol.stimulus_sequence or (self.protocol.active_stimulus_id,)
+        if not self.protocol.randomize_stimulus_sequence:
+            return sequence * self.protocol.repetitions
+        generator = random.Random(self.random_seed)
+        ordered: list[str] = []
+        for _ in range(self.protocol.repetitions):
+            cycle = list(sequence)
+            generator.shuffle(cycle)
+            ordered.extend(cycle)
+        return tuple(ordered)
 
 
 class ChannelConfig(StrictModel):

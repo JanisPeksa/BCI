@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import Signal, Slot
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from ssvep_bci.runtime.clock import Clock
@@ -19,7 +19,7 @@ class StimulusRenderer(QOpenGLWidget):
         self.clock = clock
         self.background = QColor(background_color)
         self._view: ViewState | None = None
-        self._requested_visible = False
+        self._requested_flashing = False
         self._phase_anchor = 0.0
         self._pending_ack: FrameKind | None = None
         self._last_painted_on = False
@@ -27,14 +27,14 @@ class StimulusRenderer(QOpenGLWidget):
 
     def set_view_state(self, view: ViewState) -> None:
         previous = self._view
-        previous_visible = self._requested_visible
+        previous_flashing = self._requested_flashing
         self._view = view
-        self._requested_visible = bool(view.scene and view.scene.has_visible_nodes)
-        if self._requested_visible and not previous_visible:
+        self._requested_flashing = bool(view.scene and view.scene.has_flashing_nodes)
+        if self._requested_flashing and not previous_flashing:
             self._phase_anchor = self.clock.monotonic()
             self._pending_ack = FrameKind.ONSET
             self.update()
-        elif not self._requested_visible and previous_visible:
+        elif not self._requested_flashing and previous_flashing:
             self._pending_ack = FrameKind.OFFSET
             self.update()
         elif previous is None or previous.step_id != view.step_id:
@@ -45,18 +45,21 @@ class StimulusRenderer(QOpenGLWidget):
         painter.fillRect(self.rect(), self.background)
         self._last_painted_on = False
         view = self._view
-        if self._requested_visible and view is not None and view.scene is not None:
+        if view is not None and view.scene is not None and view.scene.has_visible_nodes:
             elapsed = max(0.0, self.clock.monotonic() - self._phase_anchor)
             for node in sorted(view.scene.nodes, key=lambda item: item.z_order):
                 if not node.visible_requested:
                     continue
                 stimulus = node.stimulus
-                phase = (
-                    elapsed * stimulus.frequency_hz
-                    + stimulus.phase_offset_radians / (2 * math.pi)
-                ) % 1.0
-                is_on = phase < stimulus.duty_cycle
-                self._last_painted_on = self._last_painted_on or is_on
+                if node.flashing_requested:
+                    phase = (
+                        elapsed * stimulus.frequency_hz
+                        + stimulus.phase_offset_radians / (2 * math.pi)
+                    ) % 1.0
+                    is_on = phase < stimulus.duty_cycle
+                    self._last_painted_on = self._last_painted_on or is_on
+                else:
+                    is_on = False
                 visual = stimulus.visual
                 width = visual.width_px
                 height = visual.height_px
@@ -70,6 +73,13 @@ class StimulusRenderer(QOpenGLWidget):
                     painter.drawEllipse(*rect)
                 else:
                     painter.drawRect(*rect)
+                if node.highlighted:
+                    painter.setPen(QPen(QColor("#FF3040"), 8))
+                    painter.setBrush(QColor(0, 0, 0, 0))
+                    if visual.shape.value == "circle":
+                        painter.drawEllipse(*rect)
+                    else:
+                        painter.drawRect(*rect)
         painter.end()
 
     @Slot()
@@ -95,5 +105,5 @@ class StimulusRenderer(QOpenGLWidget):
                 wall_clock_timestamp_utc=self.clock.wall_time_utc(),
             ))
             self._pending_ack = None
-        if self._requested_visible:
+        if self._requested_flashing:
             self.update()

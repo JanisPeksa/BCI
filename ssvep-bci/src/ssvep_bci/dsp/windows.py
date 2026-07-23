@@ -101,12 +101,16 @@ def make_window(
         config.window.wait_timeout_seconds,
         channel_indexes,
     )
+    stimulus_by_id = {stimulus.id: stimulus for stimulus in resolved.config.stimuli}
+    target_stimulus = stimulus_by_id.get(request.onset.stimulus_id or "")
+    if target_stimulus is None:
+        raise ValueError(f"unknown stimulus ID in onset event: {request.onset.stimulus_id}")
     return StimulusWindow(
         window_id=str(uuid.uuid4()),
         presentation_id=request.onset.presentation_id or "",
         trial_id=request.onset.trial_id or "",
         stimulus_id=request.onset.stimulus_id or "",
-        target_frequency_hz=resolved.config.active_stimulus.frequency_hz,
+        target_frequency_hz=target_stimulus.frequency_hz,
         candidate_frequencies_hz=config.candidate_frequencies_hz,
         onset_monotonic_timestamp=onset,
         offset_monotonic_timestamp=offset,
@@ -119,4 +123,3 @@ def make_window(
         expected_sample_count=expected,
         diagnostics=diagnostics,
     )
-

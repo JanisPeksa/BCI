@@ -46,3 +46,34 @@ def test_stimulus_interval_starts_and_ends_on_frame_acknowledgements() -> None:
     offset = next(event for event in sink.events if event.event_type == EventType.STIMULUS_OFFSET)
     assert offset.monotonic_timestamp == 7.0
     assert offset.payload["confirmed_by_frame_swap"] is True
+
+
+def test_collection_cues_one_target_then_flashes_four_target_scene() -> None:
+    resolved = load_experiment(
+        "src/ssvep_bci/resources/configs/four-frequency-collection.yaml"
+    )
+    clock = VirtualClock()
+    runtime = ProtocolRuntime(
+        "session",
+        compile_session_plan(resolved.config),
+        resolved.config,
+        clock,
+        MemoryEventSink(),
+    )
+    runtime.start()
+    clock.advance(10.0)
+    runtime.tick()
+    cue = runtime.view_state()
+    assert cue.scene is not None
+    assert len(cue.scene.nodes) == 4
+    assert not cue.scene.has_flashing_nodes
+    assert sum(node.highlighted for node in cue.scene.nodes) == 1
+
+    clock.advance(5.0)
+    runtime.tick()
+    stimulus = runtime.view_state()
+    assert runtime.state == RunState.AWAITING_ONSET
+    assert stimulus.scene is not None
+    assert len(stimulus.scene.nodes) == 4
+    assert stimulus.scene.has_flashing_nodes
+    assert not any(node.highlighted for node in stimulus.scene.nodes)
