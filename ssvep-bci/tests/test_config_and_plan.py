@@ -71,3 +71,25 @@ def test_single_circle_collection_is_balanced_and_exactly_four_minutes() -> None
     for start in range(0, 48, 4):
         assert set(targets[start:start + 4]) == expected
     assert [step.duration_seconds for step in stimulus_steps] == [5.0] * 48
+
+
+def test_three_frequency_square_collection_is_balanced_and_exactly_four_minutes() -> None:
+    resolved = load_experiment(
+        "src/ssvep_bci/resources/configs/three-frequency-single-square-4min.yaml"
+    )
+    plan = compile_session_plan(resolved.config)
+    stimulus_steps = [step for step in plan.steps if step.kind == StepKind.STIMULUS]
+    targets = [step.stimulus_id for step in stimulus_steps]
+    expected = {"freq-8", "freq-11", "freq-14"}
+
+    assert plan.trial_count == 48
+    assert plan.duration_seconds == 386.0
+    assert all(targets.count(target) == 16 for target in expected)
+    for start in range(0, 48, 3):
+        assert set(targets[start:start + 3]) == expected
+    assert all(
+        stimulus.visual.shape.value == "rectangle"
+        and stimulus.visual.width_px == 800
+        and stimulus.visual.height_px == 800
+        for stimulus in resolved.config.stimuli
+    )

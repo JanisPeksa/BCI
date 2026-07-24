@@ -45,6 +45,12 @@ if __name__ == '__main__':
         lambda: stopThread, board_details[0], board_details[1], label, filename))
     x.start()
 
+    # Start the stimulus session without window chrome so it fills the display.
+    # Keep the configured size as the initial geometry for window managers that
+    # briefly use it before applying the fullscreen state.
+    # window.resize(HOR, VERT)
+    # window.showFullScreen()
+
     window.setFixedSize(HOR, VERT)  # initial window size
     window.show()
 
