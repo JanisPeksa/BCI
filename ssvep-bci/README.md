@@ -116,6 +116,33 @@ back in after changing group membership:
 sudo usermod -aG dialout "$USER"
 ```
 
+## Session spectrogram notebook
+
+The optional `analysis` extra installs Jupyter, its Python kernel, pandas, and
+matplotlib in addition to the project's core NumPy, SciPy, scikit-learn, and
+PyYAML dependencies. From the repository's `BCI` directory:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".\ssvep-bci[analysis]"
+jupyter lab ".\ssvep-bci\notebooks\session_spectrograms.ipynb"
+```
+
+The equivalent Linux commands are:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e "./ssvep-bci[analysis]"
+jupyter lab "./ssvep-bci/notebooks/session_spectrograms.ipynb"
+```
+
+Run Jupyter from the repository's `BCI` directory so the notebook's default
+relative session path resolves directly. To analyze another compatible
+recording, change `SESSION_PATH` in the notebook's configuration cell. For
+automatic discovery, set `SESSION_PATH = None` and set `SESSION_ROOT` to a
+directory containing session folders; the newest compatible folder name is
+selected.
+
 ## CLI names
 
 Installation creates the `ssvep-bci` console command. The importable Python

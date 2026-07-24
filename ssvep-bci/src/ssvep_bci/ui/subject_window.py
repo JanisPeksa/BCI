@@ -5,9 +5,22 @@ from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ssvep_bci.config.loader import ResolvedExperiment
+from ssvep_bci.planning.models import StepKind
 from ssvep_bci.runtime.commands import AbortSession, CloseRequested
 from ssvep_bci.runtime.coordinator import CoordinatorState, SessionCoordinator
+from ssvep_bci.runtime.view_state import ViewState
 from ssvep_bci.stimuli.opengl_renderer import StimulusRenderer
+
+
+def format_trial_progress(view: ViewState) -> str:
+    rest_phases = {StepKind.INTER_TRIAL.value, StepKind.FINAL_REST.value}
+    if (
+        view.phase not in rest_phases
+        or view.completed_trial_count <= 0
+        or view.trial_count is None
+    ):
+        return ""
+    return f"Trial {view.completed_trial_count}/{view.trial_count} completed"
 
 
 class SubjectWindow(QWidget):
@@ -50,10 +63,7 @@ class SubjectWindow(QWidget):
         view = self.coordinator.runtime.view_state()
         self.renderer.set_view_state(view)
         self.message.setText(view.message)
-        progress = ""
-        if view.trial_number is not None:
-            progress = f"Trial {view.trial_number}/{view.trial_count}"
-        self.status.setText(progress)
+        self.status.setText(format_trial_progress(view))
 
     def _execute_command(self, command) -> None:
         try:
@@ -80,4 +90,3 @@ class SubjectWindow(QWidget):
             return
         self.coordinator.execute(CloseRequested())
         event.ignore()
-

@@ -24,9 +24,19 @@ acquisition = [
     "pylsl>=1.17,<2",
     "pyserial>=3.5,<4",
 ]
+analysis = [
+    "ipykernel>=6.29,<7",
+    "jupyter>=1.1,<2",
+    "matplotlib>=3.9,<4",
+    "pandas>=2.2,<3",
+]
 dev = ["pytest>=8,<9", "pytest-qt>=4.4,<5"]
 all = [
     "brainflow>=5.16,<6",
+    "ipykernel>=6.29,<7",
+    "jupyter>=1.1,<2",
+    "matplotlib>=3.9,<4",
+    "pandas>=2.2,<3",
     "pylsl>=1.17,<2",
     "pyserial>=3.5,<4",
     "pytest>=8,<9",
@@ -45,4 +55,3 @@ ssvep_bci = ["resources/**/*.yaml", "resources/**/*.ttf"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-

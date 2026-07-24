@@ -47,6 +47,7 @@ class ProtocolRuntime:
         self._deadline: float | None = None
         self._sequence = 0
         self._active_trial_id: str | None = None
+        self._completed_trial_count = 0
         self._stimulus_onset: float | None = None
         self.error: str | None = None
         self._stimulus_indexes = {
@@ -126,6 +127,7 @@ class ProtocolRuntime:
             },
         )
         self._emit(EventType.TRIAL_ENDED, step=step, marker_code=self.config.markers.trial_end)
+        self._completed_trial_count += 1
         self._active_trial_id = None
         self._stimulus_onset = None
         self._cursor += 1
@@ -205,7 +207,7 @@ class ProtocolRuntime:
         messages = {
             StepKind.INITIAL_REST: "Prepare",
             StepKind.PRE_STIMULUS: "Focus on the stimulus location",
-            StepKind.STIMULUS: "Focus on the flashing stimulus",
+            StepKind.STIMULUS: "",
             StepKind.INTER_TRIAL: "Rest",
             StepKind.FINAL_REST: "Complete",
         }
@@ -215,6 +217,7 @@ class ProtocolRuntime:
             step_id=step.step_id if step else None,
             trial_number=step.trial_number if step else None,
             trial_count=self.plan.trial_count,
+            completed_trial_count=self._completed_trial_count,
             presentation_id=step.presentation_id if step else None,
             scene=scene,
             remaining_seconds=self.remaining_seconds,

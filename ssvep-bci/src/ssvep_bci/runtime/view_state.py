@@ -10,6 +10,7 @@ class ViewState(StrictModel):
     step_id: str | None = None
     trial_number: int | None = None
     trial_count: int | None = None
+    completed_trial_count: int = 0
     presentation_id: str | None = None
     scene: StimulusScene | None = None
     remaining_seconds: float = 0.0
