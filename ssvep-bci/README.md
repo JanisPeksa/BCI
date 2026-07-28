@@ -245,6 +245,27 @@ ssvep-bci run --config ".\src\ssvep_bci\resources\configs\four-frequency-single-
 This profile uses the synthetic device for dry runs. Change `device_profile` to
 `../devices/cyton.yaml` in a copied config for BrainFlow/Cyton acquisition.
 
+The dual-square profile presents two 200×200 px squares on every trial. The
+11.75 Hz target is balanced between the left and right positions while the
+opposite square uses either 8.75 or 13.75 Hz. Each of 12 blocks contains all
+four side/frequency conditions once in a deterministic order controlled by
+`random_seed`. A three-second cue shows both dark squares with a red border
+around the target; during the four-second stimulation both squares flash and
+the border is removed.
+
+Validate the profile, then run a windowed synthetic dry run:
+
+```powershell
+ssvep-bci validate --config ".\src\ssvep_bci\resources\configs\three-frequency-dual-square-4sec-4min.yaml"
+ssvep-bci run --config ".\src\ssvep_bci\resources\configs\three-frequency-dual-square-4sec-4min.yaml" --participant TEST001 --session-label dual-square --windowed
+```
+
+For acquisition hardware, copy the profile and change `device_profile` to the
+appropriate device YAML. `dual_stimulus.horizontal_layout: equal_gaps` computes
+equal left-edge, inter-square, and right-edge gaps from the actual viewport.
+To use fixed normalized centers instead, set `horizontal_layout: manual` and
+provide both `left_center_x` and `right_center_x`.
+
 Validate a completed, aborted, failed, or incomplete session folder:
 
 ```powershell

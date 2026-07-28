@@ -5,14 +5,18 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 
-from ssvep_bci.config.models import ExperimentConfig
+from ssvep_bci.config.models import ExperimentConfig, TargetSide
 from ssvep_bci.events.bus import EventSink
 from ssvep_bci.events.models import EventSource, EventType, ProtocolEvent
 from ssvep_bci.planning.models import PlanStep, SessionPlan, StepKind
 from ssvep_bci.runtime.clock import Clock
 from ssvep_bci.runtime.commands import FrameKind, PresentationFrameAcknowledged
 from ssvep_bci.runtime.view_state import ViewState
-from ssvep_bci.stimuli.models import StimulusNode, StimulusScene
+from ssvep_bci.stimuli.models import (
+    StimulusNode,
+    StimulusPlacementOverride,
+    StimulusScene,
+)
 
 
 class RunState(StrEnum):
@@ -183,14 +187,39 @@ class ProtocolRuntime:
         )
         scene = None
         if target is not None and step is not None:
-            scene_ids = self.config.protocol.simultaneous_stimulus_ids or (target.id,)
             flashing = (
                 step.kind == StepKind.STIMULUS
                 and self.state in {RunState.AWAITING_ONSET, RunState.RUNNING}
             )
-            scene = StimulusScene(
-                scene_id=step.presentation_id or step.step_id,
-                nodes=tuple(
+            dual = self.config.dual_stimulus
+            if dual is not None and step.distractor_stimulus_id is not None:
+                assert step.target_side is not None
+                distractor_side = (
+                    TargetSide.RIGHT
+                    if step.target_side == TargetSide.LEFT
+                    else TargetSide.LEFT
+                )
+                scene_nodes = (
+                    StimulusNode(
+                        stimulus=target,
+                        visible_requested=True,
+                        flashing_requested=flashing,
+                        highlighted=step.kind == StepKind.PRE_STIMULUS,
+                        placement_override=self._dual_placement(step.target_side),
+                    ),
+                    StimulusNode(
+                        stimulus=self._stimuli_by_id[step.distractor_stimulus_id],
+                        visible_requested=True,
+                        flashing_requested=flashing,
+                        highlighted=False,
+                        placement_override=self._dual_placement(distractor_side),
+                    ),
+                )
+            else:
+                scene_ids = self.config.protocol.simultaneous_stimulus_ids or (
+                    target.id,
+                )
+                scene_nodes = tuple(
                     StimulusNode(
                         stimulus=self._stimuli_by_id[stimulus_id],
                         visible_requested=True,
@@ -201,7 +230,10 @@ class ProtocolRuntime:
                         ),
                     )
                     for stimulus_id in scene_ids
-                ),
+                )
+            scene = StimulusScene(
+                scene_id=step.presentation_id or step.step_id,
+                nodes=scene_nodes,
             )
         phase = step.kind.value if step else self.state.value
         messages = {
@@ -258,6 +290,40 @@ class ProtocolRuntime:
         )
         return base + self._stimulus_indexes[step.stimulus_id]
 
+    def _dual_placement(self, side: TargetSide) -> StimulusPlacementOverride:
+        dual = self.config.dual_stimulus
+        assert dual is not None
+        center_x = (
+            dual.left_center_x if side == TargetSide.LEFT else dual.right_center_x
+        )
+        return StimulusPlacementOverride(
+            side=side,
+            width_px=dual.width_px,
+            height_px=dual.height_px,
+            center_y=dual.center_y,
+            horizontal_layout=dual.horizontal_layout,
+            center_x=center_x,
+        )
+
+    def _condition_payload(self, step: PlanStep | None) -> dict:
+        if (
+            step is None
+            or step.target_side is None
+            or step.distractor_stimulus_id is None
+            or step.stimulus_id is None
+        ):
+            return {}
+        return {
+            "target_frequency_hz": self._stimuli_by_id[
+                step.stimulus_id
+            ].frequency_hz,
+            "target_side": step.target_side.value,
+            "distractor_frequency_hz": self._stimuli_by_id[
+                step.distractor_stimulus_id
+            ].frequency_hz,
+            "distractor_stimulus_id": step.distractor_stimulus_id,
+        }
+
     def _emit(
         self,
         event_type: EventType,
@@ -270,6 +336,8 @@ class ProtocolRuntime:
     ) -> None:
         self._sequence += 1
         monotonic, wall = occurrence or (self.clock.monotonic(), self.clock.wall_time_utc())
+        event_payload = self._condition_payload(step)
+        event_payload.update(payload or {})
         self.sink.emit(ProtocolEvent(
             event_id=str(uuid.uuid4()),
             sequence_number=self._sequence,
@@ -285,5 +353,5 @@ class ProtocolRuntime:
             trial_number=step.trial_number if step else None,
             stimulus_id=step.stimulus_id if step else None,
             presentation_id=step.presentation_id if step else None,
-            payload=payload or {},
+            payload=event_payload,
         ))

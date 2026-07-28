@@ -72,12 +72,16 @@ class AcquisitionService:
         if event.marker_code is None:
             return
         frequency = None
+        distractor_frequency = None
         if event.event_type == EventType.STIMULUS_ONSET and event.stimulus_id:
             frequency = next(
                 stimulus.frequency_hz
                 for stimulus in self.resolved.config.stimuli
                 if stimulus.id == event.stimulus_id
             )
+            payload_frequency = event.payload.get("distractor_frequency_hz")
+            if payload_frequency is not None:
+                distractor_frequency = float(payload_frequency)
         request = MarkerRequest(
             event_id=event.event_id,
             event_sequence=event.sequence_number,
@@ -86,6 +90,7 @@ class AcquisitionService:
             event_monotonic_timestamp=event.monotonic_timestamp,
             event_wall_clock_timestamp_utc=event.wall_clock_timestamp_utc,
             stimulus_frequency_hz=frequency,
+            distractor_frequency_hz=distractor_frequency,
         )
         try:
             self._markers.put_nowait(request)

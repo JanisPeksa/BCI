@@ -61,11 +61,21 @@ class StimulusRenderer(QOpenGLWidget):
                 else:
                     is_on = False
                 visual = stimulus.visual
-                width = visual.width_px
-                height = visual.height_px
-                center_x = int(self.width() * visual.center_x)
-                center_y = int(self.height() * visual.center_y)
-                rect = (center_x - width // 2, center_y - height // 2, width, height)
+                if node.placement_override is not None:
+                    rect = node.placement_override.resolve_rect(
+                        self.width(), self.height()
+                    )
+                else:
+                    width = visual.width_px
+                    height = visual.height_px
+                    center_x = int(self.width() * visual.center_x)
+                    center_y = int(self.height() * visual.center_y)
+                    rect = (
+                        center_x - width // 2,
+                        center_y - height // 2,
+                        width,
+                        height,
+                    )
                 color = QColor(visual.on_color if is_on else visual.off_color)
                 painter.setPen(color)
                 painter.setBrush(color)

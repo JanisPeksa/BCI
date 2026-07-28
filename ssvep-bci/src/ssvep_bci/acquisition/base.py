@@ -71,6 +71,7 @@ class MarkerRequest:
     event_monotonic_timestamp: float
     event_wall_clock_timestamp_utc: datetime
     stimulus_frequency_hz: float | None = None
+    distractor_frequency_hz: float | None = None
 
 
 @dataclass(frozen=True)
@@ -91,4 +92,3 @@ class AcquisitionBackend(Protocol):
     def insert_marker(self, request: MarkerRequest) -> MarkerReceipt: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
-

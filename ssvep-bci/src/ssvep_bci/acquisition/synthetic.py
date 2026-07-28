@@ -28,7 +28,7 @@ class SyntheticBackend:
         self._start = 0.0
         self._cursor = 0
         self._markers: list[tuple[float, int]] = []
-        self._stimulus_transitions: list[tuple[float, float | None]] = []
+        self._stimulus_transitions: list[tuple[float, tuple[float, ...]]] = []
 
     def prepare(self) -> AcquisitionDescriptor:
         self._prepared = True
@@ -64,15 +64,15 @@ class SyntheticBackend:
         eeg = np.empty((len(indexes), len(self.profile.channels)), dtype=np.float64)
         markers = np.zeros(len(indexes), dtype=np.float64)
         for row, (sample_index, timestamp) in enumerate(zip(indexes, timestamps, strict=True)):
-            active_frequency = self._frequency_at(float(timestamp))
+            active_frequencies = self._frequencies_at(float(timestamp))
             for channel in range(len(self.profile.channels)):
                 t = sample_index / self.profile.sampling_rate_hz
                 baseline = self.connection.baseline_amplitude_uv * math.sin(
                     2 * math.pi * (8.0 + channel * 0.2) * t
                 )
                 response = 0.0
-                if active_frequency is not None:
-                    response = self.connection.ssvep_amplitude_uv * (
+                for active_frequency in active_frequencies:
+                    response += self.connection.ssvep_amplitude_uv * (
                         math.sin(2 * math.pi * active_frequency * t)
                         + 0.35 * math.sin(2 * math.pi * 2 * active_frequency * t)
                     )
@@ -104,11 +104,19 @@ class SyntheticBackend:
         self._markers.append((request.event_monotonic_timestamp, request.marker_code))
         self._markers.sort()
         if request.event_type == "stimulus_onset":
+            frequencies = tuple(
+                value
+                for value in (
+                    request.stimulus_frequency_hz,
+                    request.distractor_frequency_hz,
+                )
+                if value is not None
+            )
             self._stimulus_transitions.append(
-                (request.event_monotonic_timestamp, request.stimulus_frequency_hz)
+                (request.event_monotonic_timestamp, frequencies)
             )
         elif request.event_type == "stimulus_offset":
-            self._stimulus_transitions.append((request.event_monotonic_timestamp, None))
+            self._stimulus_transitions.append((request.event_monotonic_timestamp, ()))
         self._stimulus_transitions.sort(key=lambda item: item[0])
         return MarkerReceipt(request, True, True, attempt)
 
@@ -119,11 +127,15 @@ class SyntheticBackend:
         self._running = False
         self._prepared = False
 
-    def _frequency_at(self, timestamp: float) -> float | None:
-        active = None
-        for transition_time, frequency in self._stimulus_transitions:
+    def _frequencies_at(self, timestamp: float) -> tuple[float, ...]:
+        active: tuple[float, ...] = ()
+        for transition_time, frequencies in self._stimulus_transitions:
             if transition_time > timestamp + 1e-9:
                 break
-            active = frequency
+            active = frequencies
         return active
 
+    def _frequency_at(self, timestamp: float) -> float | None:
+        """Retain the former single-frequency helper for compatibility."""
+        frequencies = self._frequencies_at(timestamp)
+        return frequencies[0] if frequencies else None

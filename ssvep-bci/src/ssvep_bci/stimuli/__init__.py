@@ -1,3 +1,7 @@
-from ssvep_bci.stimuli.models import StimulusNode, StimulusScene
+from ssvep_bci.stimuli.models import (
+    StimulusNode,
+    StimulusPlacementOverride,
+    StimulusScene,
+)
 
-__all__ = ["StimulusNode", "StimulusScene"]
+__all__ = ["StimulusNode", "StimulusPlacementOverride", "StimulusScene"]

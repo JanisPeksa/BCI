@@ -29,6 +29,16 @@ class WindowMode(StrEnum):
     WINDOWED = "windowed"
 
 
+class TargetSide(StrEnum):
+    LEFT = "left"
+    RIGHT = "right"
+
+
+class HorizontalLayout(StrEnum):
+    EQUAL_GAPS = "equal_gaps"
+    MANUAL = "manual"
+
+
 class VisualConfig(StrictModel):
     shape: Shape
     width_px: int = Field(gt=0)
@@ -58,6 +68,68 @@ class StimulusConfig(StrictModel):
         if not all(math.isfinite(value) for value in values):
             raise ValueError("stimulus numeric values must be finite")
         return self
+
+
+class DualStimulusCondition(StrictModel):
+    target_side: TargetSide
+    distractor_stimulus_id: str = Field(pattern=ID_PATTERN)
+
+
+class DualStimulusConfig(StrictModel):
+    target_stimulus_id: str = Field(pattern=ID_PATTERN)
+    distractor_stimulus_ids: tuple[str, ...] = Field(min_length=1)
+    conditions: tuple[DualStimulusCondition, ...] | None = Field(
+        default=None, min_length=1
+    )
+    randomize_conditions: bool = True
+    width_px: int = Field(default=200, gt=0)
+    height_px: int = Field(default=200, gt=0)
+    center_y: float = Field(default=0.5, ge=0, le=1)
+    horizontal_layout: HorizontalLayout = HorizontalLayout.EQUAL_GAPS
+    left_center_x: float | None = Field(default=None, ge=0, le=1)
+    right_center_x: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_layout_and_conditions(self) -> "DualStimulusConfig":
+        if len(set(self.distractor_stimulus_ids)) != len(
+            self.distractor_stimulus_ids
+        ):
+            raise ValueError("distractor_stimulus_ids must be unique")
+        if self.conditions is not None:
+            keys = [
+                (condition.target_side, condition.distractor_stimulus_id)
+                for condition in self.conditions
+            ]
+            if len(set(keys)) != len(keys):
+                raise ValueError("dual-stimulus conditions must be unique")
+        manual_centers = (self.left_center_x, self.right_center_x)
+        if self.horizontal_layout == HorizontalLayout.MANUAL:
+            if any(value is None for value in manual_centers):
+                raise ValueError(
+                    "manual horizontal layout requires left_center_x and right_center_x"
+                )
+            assert self.left_center_x is not None
+            assert self.right_center_x is not None
+            if self.left_center_x >= self.right_center_x:
+                raise ValueError("left_center_x must be less than right_center_x")
+        elif any(value is not None for value in manual_centers):
+            raise ValueError(
+                "left_center_x and right_center_x require manual horizontal layout"
+            )
+        return self
+
+    @property
+    def resolved_conditions(self) -> tuple[DualStimulusCondition, ...]:
+        if self.conditions is not None:
+            return self.conditions
+        return tuple(
+            DualStimulusCondition(
+                target_side=side,
+                distractor_stimulus_id=distractor_id,
+            )
+            for distractor_id in self.distractor_stimulus_ids
+            for side in (TargetSide.LEFT, TargetSide.RIGHT)
+        )
 
 
 class ProtocolConfig(StrictModel):
@@ -183,6 +255,7 @@ class ExperimentConfig(StrictModel):
     device_profile: Path
     protocol: ProtocolConfig
     stimuli: tuple[StimulusConfig, ...] = Field(min_length=1)
+    dual_stimulus: DualStimulusConfig | None = None
     presentation: PresentationConfig = PresentationConfig()
     output: OutputConfig = OutputConfig()
     processing: ProcessingConfig
@@ -226,6 +299,43 @@ class ExperimentConfig(StrictModel):
             raise ValueError(
                 "randomize_stimulus_sequence requires stimulus_sequence"
             )
+        if self.dual_stimulus is not None:
+            dual = self.dual_stimulus
+            referenced = {dual.target_stimulus_id, *dual.distractor_stimulus_ids}
+            unknown = sorted(referenced - set(ids))
+            if unknown:
+                raise ValueError(
+                    "dual_stimulus references unknown stimulus IDs: "
+                    + ", ".join(unknown)
+                )
+            if dual.target_stimulus_id in dual.distractor_stimulus_ids:
+                raise ValueError(
+                    "target_stimulus_id must not also be a distractor stimulus"
+                )
+            condition_keys = {
+                (condition.target_side, condition.distractor_stimulus_id)
+                for condition in dual.resolved_conditions
+            }
+            expected_condition_keys = {
+                (side, distractor_id)
+                for distractor_id in dual.distractor_stimulus_ids
+                for side in (TargetSide.LEFT, TargetSide.RIGHT)
+            }
+            if condition_keys != expected_condition_keys:
+                raise ValueError(
+                    "dual-stimulus conditions must contain each target-side and "
+                    "distractor combination exactly once"
+                )
+            if self.protocol.active_stimulus_id != dual.target_stimulus_id:
+                raise ValueError(
+                    "active_stimulus_id must match dual target_stimulus_id"
+                )
+            if sequence is not None or simultaneous is not None:
+                raise ValueError(
+                    "dual_stimulus cannot be combined with stimulus_sequence or "
+                    "simultaneous_stimulus_ids"
+                )
+            selected_ids = tuple(referenced)
         selected = [stimulus for stimulus in self.stimuli if stimulus.id in selected_ids]
         if self.processing.enabled and not all(
             any(abs(stimulus.frequency_hz - value) <= 1e-6
@@ -270,6 +380,13 @@ class ExperimentConfig(StrictModel):
     @property
     def ordered_stimulus_ids(self) -> tuple[str, ...]:
         """Return the flattened trial order, preserving legacy configs."""
+        if self.dual_stimulus is not None:
+            return (
+                self.dual_stimulus.target_stimulus_id,
+            ) * (
+                self.protocol.repetitions
+                * len(self.dual_stimulus.resolved_conditions)
+            )
         sequence = self.protocol.stimulus_sequence or (self.protocol.active_stimulus_id,)
         if not self.protocol.randomize_stimulus_sequence:
             return sequence * self.protocol.repetitions
