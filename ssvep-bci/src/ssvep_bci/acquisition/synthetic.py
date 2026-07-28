@@ -104,7 +104,7 @@ class SyntheticBackend:
         self._markers.append((request.event_monotonic_timestamp, request.marker_code))
         self._markers.sort()
         if request.event_type == "stimulus_onset":
-            frequencies = tuple(
+            frequencies = request.stimulus_frequencies_hz or tuple(
                 value
                 for value in (
                     request.stimulus_frequency_hz,

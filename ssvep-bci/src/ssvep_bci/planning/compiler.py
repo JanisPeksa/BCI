@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from itertools import permutations
 
 from ssvep_bci.config.models import ExperimentConfig
 from ssvep_bci.planning.models import PlanStep, SessionPlan, StepKind
@@ -17,15 +18,15 @@ def config_fingerprint(config: ExperimentConfig) -> str:
 
 def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
     protocol = config.protocol
-    if config.dual_stimulus is None:
+    if config.dual_stimulus is None and config.multi_stimulus is None:
         sequence_length = len(
             protocol.stimulus_sequence or (protocol.active_stimulus_id,)
         )
         trials = [
-            (stimulus_id, None, None)
+            (stimulus_id, None, None, None, None)
             for stimulus_id in config.ordered_stimulus_ids
         ]
-    else:
+    elif config.dual_stimulus is not None:
         dual = config.dual_stimulus
         sequence_length = len(dual.resolved_conditions)
         generator = random.Random(config.random_seed)
@@ -39,9 +40,54 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
                     dual.target_stimulus_id,
                     condition.target_side,
                     condition.distractor_stimulus_id,
+                    None,
+                    None,
                 )
                 for condition in conditions
             )
+    else:
+        multi = config.multi_stimulus
+        assert multi is not None
+        sequence_length = len(multi.positions)
+        generator = random.Random(config.random_seed)
+        trials = []
+        assignment_decks: dict[int, list[tuple[str, ...]]] = {}
+        for target_index in range(len(multi.positions)):
+            deck: list[tuple[str, ...]] = []
+            while len(deck) < protocol.repetitions:
+                distractor_orders = list(
+                    permutations(multi.distractor_stimulus_ids)
+                )
+                if multi.randomize_conditions:
+                    generator.shuffle(distractor_orders)
+                for distractor_order in distractor_orders:
+                    distractor_iterator = iter(distractor_order)
+                    deck.append(
+                        tuple(
+                            multi.target_stimulus_id
+                            if index == target_index
+                            else next(distractor_iterator)
+                            for index in range(len(multi.positions))
+                        )
+                    )
+                    if len(deck) == protocol.repetitions:
+                        break
+            assignment_decks[target_index] = deck
+        for repetition in range(protocol.repetitions):
+            target_indexes = list(range(len(multi.positions)))
+            if multi.randomize_conditions:
+                generator.shuffle(target_indexes)
+            for target_index in target_indexes:
+                assignments = assignment_decks[target_index][repetition]
+                trials.append(
+                    (
+                        multi.target_stimulus_id,
+                        None,
+                        None,
+                        multi.positions[target_index].id,
+                        assignments,
+                    )
+                )
     steps: list[PlanStep] = []
     if protocol.initial_rest_seconds:
         steps.append(PlanStep(
@@ -49,9 +95,13 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
             kind=StepKind.INITIAL_REST,
             duration_seconds=protocol.initial_rest_seconds,
         ))
-    for number, (stimulus_id, target_side, distractor_id) in enumerate(
-        trials, start=1
-    ):
+    for number, (
+        stimulus_id,
+        target_side,
+        distractor_id,
+        target_position_id,
+        position_stimulus_ids,
+    ) in enumerate(trials, start=1):
         trial_id = f"trial-{number:04d}"
         if protocol.pre_stimulus_seconds:
             steps.append(PlanStep(
@@ -63,6 +113,8 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
                 stimulus_id=stimulus_id,
                 target_side=target_side,
                 distractor_stimulus_id=distractor_id,
+                target_position_id=target_position_id,
+                position_stimulus_ids=position_stimulus_ids,
             ))
         steps.append(PlanStep(
             step_id=f"{trial_id}-stimulus",
@@ -74,6 +126,8 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
             presentation_id=f"presentation-{number:04d}",
             target_side=target_side,
             distractor_stimulus_id=distractor_id,
+            target_position_id=target_position_id,
+            position_stimulus_ids=position_stimulus_ids,
         ))
         if number < len(trials):
             completed_sequence = number % sequence_length == 0

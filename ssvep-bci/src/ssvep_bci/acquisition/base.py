@@ -72,6 +72,7 @@ class MarkerRequest:
     event_wall_clock_timestamp_utc: datetime
     stimulus_frequency_hz: float | None = None
     distractor_frequency_hz: float | None = None
+    stimulus_frequencies_hz: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)

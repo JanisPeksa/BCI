@@ -73,6 +73,7 @@ class AcquisitionService:
             return
         frequency = None
         distractor_frequency = None
+        stimulus_frequencies: tuple[float, ...] = ()
         if event.event_type == EventType.STIMULUS_ONSET and event.stimulus_id:
             frequency = next(
                 stimulus.frequency_hz
@@ -82,6 +83,11 @@ class AcquisitionService:
             payload_frequency = event.payload.get("distractor_frequency_hz")
             if payload_frequency is not None:
                 distractor_frequency = float(payload_frequency)
+            payload_frequencies = event.payload.get("stimulus_frequencies_hz")
+            if payload_frequencies is not None:
+                stimulus_frequencies = tuple(
+                    float(value) for value in payload_frequencies
+                )
         request = MarkerRequest(
             event_id=event.event_id,
             event_sequence=event.sequence_number,
@@ -91,6 +97,7 @@ class AcquisitionService:
             event_wall_clock_timestamp_utc=event.wall_clock_timestamp_utc,
             stimulus_frequency_hz=frequency,
             distractor_frequency_hz=distractor_frequency,
+            stimulus_frequencies_hz=stimulus_frequencies,
         )
         try:
             self._markers.put_nowait(request)

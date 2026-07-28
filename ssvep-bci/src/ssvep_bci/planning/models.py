@@ -26,6 +26,10 @@ class PlanStep(StrictModel):
     presentation_id: str | None = None
     target_side: TargetSide | None = None
     distractor_stimulus_id: str | None = None
+    target_position_id: str | None = None
+    position_stimulus_ids: tuple[str, ...] | None = Field(
+        default=None, min_length=2
+    )
 
     @model_validator(mode="after")
     def validate_condition(self) -> "PlanStep":
@@ -37,6 +41,28 @@ class PlanStep(StrictModel):
             )
         if has_side and self.stimulus_id is None:
             raise ValueError("a dual-stimulus condition requires stimulus_id")
+        has_position = self.target_position_id is not None
+        has_assignments = self.position_stimulus_ids is not None
+        if has_position != has_assignments:
+            raise ValueError(
+                "target_position_id and position_stimulus_ids must be set together"
+            )
+        if has_position and self.stimulus_id is None:
+            raise ValueError("a multi-stimulus condition requires stimulus_id")
+        if has_assignments:
+            assert self.position_stimulus_ids is not None
+            if len(set(self.position_stimulus_ids)) != len(
+                self.position_stimulus_ids
+            ):
+                raise ValueError(
+                    "multi-stimulus position assignments must be unique"
+                )
+            if self.position_stimulus_ids.count(self.stimulus_id) != 1:
+                raise ValueError(
+                    "multi-stimulus assignments must contain the target exactly once"
+                )
+        if has_side and has_position:
+            raise ValueError("dual and multi-stimulus conditions are mutually exclusive")
         return self
 
 

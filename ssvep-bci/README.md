@@ -249,7 +249,7 @@ The dual-square profile presents two 200×200 px squares on every trial. The
 11.75 Hz target is balanced between the left and right positions while the
 opposite square uses either 8.75 or 13.75 Hz. Each of 12 blocks contains all
 four side/frequency conditions once in a deterministic order controlled by
-`random_seed`. A three-second cue shows both dark squares with a red border
+`random_seed`. A one-second cue shows both dark squares with a red border
 around the target; during the four-second stimulation both squares flash and
 the border is removed.
 
@@ -265,6 +265,34 @@ appropriate device YAML. `dual_stimulus.horizontal_layout: equal_gaps` computes
 equal left-edge, inter-square, and right-edge gaps from the actual viewport.
 To use fixed normalized centers instead, set `horizontal_layout: manual` and
 provide both `left_center_x` and `right_center_x`.
+
+The four-square target/distractor profile presents the configurable 12.75 Hz
+target together with 8.75, 9.75, and 13.75 Hz distractors in a 2×2 grid.
+Within each of 12 blocks, the target occupies every grid position once in a
+deterministically randomized order. Distractor-to-position assignments are
+also resolved into the saved session plan. The cue and stimulation timing
+matches the dual-square profile.
+
+```powershell
+ssvep-bci validate --config ".\src\ssvep_bci\resources\configs\four-frequency-four-square-4sec-4min.yaml"
+ssvep-bci run --config ".\src\ssvep_bci\resources\configs\four-frequency-four-square-4sec-4min.yaml" --participant TEST001 --session-label four-square --windowed
+```
+
+To select another configured target, update
+`multi_stimulus.target_stimulus_id`, `protocol.active_stimulus_id`, and the
+`distractor_stimulus_ids` partition together. The number of
+`multi_stimulus.positions` must equal the target plus distractor count.
+
+The six-square profile uses a 3×2 grid with a configurable 13.75 Hz target and
+8.75, 9.75, 10.75, 11.75, and 12.75 Hz distractors. Each 12-block session
+contains 72 trials, balancing the target across all six positions in every
+block while retaining deterministic distractor assignments in the session
+plan.
+
+```powershell
+ssvep-bci validate --config ".\src\ssvep_bci\resources\configs\six-frequency-six-square-4sec-4min.yaml"
+ssvep-bci run --config ".\src\ssvep_bci\resources\configs\six-frequency-six-square-4sec-4min.yaml" --participant TEST001 --session-label six-square --windowed
+```
 
 Validate a completed, aborted, failed, or incomplete session folder:
 
@@ -302,9 +330,9 @@ background thread and bounded queue. `DspTransport`, `AcquisitionBackend`, and
 `OutputSink` are the replacement seams for a future process/socket transport;
 the UI has no dependency on those implementations.
 
-The renderer accepts a collection-based `StimulusScene`, although the current
-protocol emits one configured circle or rectangle. Stimulus onset and offset
-events are timestamped only after the corresponding OpenGL frame swap. The
+The renderer accepts a collection-based `StimulusScene` and supports single,
+dual, and multi-stimulus presentations. Stimulus onset and offset events are
+timestamped only after the corresponding OpenGL frame swap. The
 Fusion style, full Qt palette, stylesheet, and font are applied explicitly, so
 native OS colors are not inherited.
 

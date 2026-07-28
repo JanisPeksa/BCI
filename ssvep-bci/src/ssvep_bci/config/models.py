@@ -132,6 +132,41 @@ class DualStimulusConfig(StrictModel):
         )
 
 
+class StimulusPositionConfig(StrictModel):
+    id: str = Field(pattern=ID_PATTERN)
+    center_x: float = Field(ge=0, le=1)
+    center_y: float = Field(ge=0, le=1)
+
+
+class MultiStimulusConfig(StrictModel):
+    target_stimulus_id: str = Field(pattern=ID_PATTERN)
+    distractor_stimulus_ids: tuple[str, ...] = Field(min_length=1)
+    positions: tuple[StimulusPositionConfig, ...] = Field(min_length=2)
+    randomize_conditions: bool = True
+    width_px: int = Field(default=200, gt=0)
+    height_px: int = Field(default=200, gt=0)
+
+    @model_validator(mode="after")
+    def validate_multi_stimulus(self) -> "MultiStimulusConfig":
+        if len(set(self.distractor_stimulus_ids)) != len(
+            self.distractor_stimulus_ids
+        ):
+            raise ValueError("multi-stimulus distractor IDs must be unique")
+        if len(self.positions) != len(self.distractor_stimulus_ids) + 1:
+            raise ValueError(
+                "multi-stimulus positions must match the total stimulus count"
+            )
+        position_ids = [position.id for position in self.positions]
+        if len(set(position_ids)) != len(position_ids):
+            raise ValueError("multi-stimulus position IDs must be unique")
+        coordinates = [
+            (position.center_x, position.center_y) for position in self.positions
+        ]
+        if len(set(coordinates)) != len(coordinates):
+            raise ValueError("multi-stimulus position coordinates must be unique")
+        return self
+
+
 class ProtocolConfig(StrictModel):
     active_stimulus_id: str = Field(pattern=ID_PATTERN)
     repetitions: int = Field(ge=1)
@@ -256,6 +291,7 @@ class ExperimentConfig(StrictModel):
     protocol: ProtocolConfig
     stimuli: tuple[StimulusConfig, ...] = Field(min_length=1)
     dual_stimulus: DualStimulusConfig | None = None
+    multi_stimulus: MultiStimulusConfig | None = None
     presentation: PresentationConfig = PresentationConfig()
     output: OutputConfig = OutputConfig()
     processing: ProcessingConfig
@@ -299,6 +335,8 @@ class ExperimentConfig(StrictModel):
             raise ValueError(
                 "randomize_stimulus_sequence requires stimulus_sequence"
             )
+        if self.dual_stimulus is not None and self.multi_stimulus is not None:
+            raise ValueError("dual_stimulus and multi_stimulus are mutually exclusive")
         if self.dual_stimulus is not None:
             dual = self.dual_stimulus
             referenced = {dual.target_stimulus_id, *dual.distractor_stimulus_ids}
@@ -333,6 +371,29 @@ class ExperimentConfig(StrictModel):
             if sequence is not None or simultaneous is not None:
                 raise ValueError(
                     "dual_stimulus cannot be combined with stimulus_sequence or "
+                    "simultaneous_stimulus_ids"
+                )
+            selected_ids = tuple(referenced)
+        if self.multi_stimulus is not None:
+            multi = self.multi_stimulus
+            referenced = {multi.target_stimulus_id, *multi.distractor_stimulus_ids}
+            unknown = sorted(referenced - set(ids))
+            if unknown:
+                raise ValueError(
+                    "multi_stimulus references unknown stimulus IDs: "
+                    + ", ".join(unknown)
+                )
+            if multi.target_stimulus_id in multi.distractor_stimulus_ids:
+                raise ValueError(
+                    "multi target_stimulus_id must not also be a distractor stimulus"
+                )
+            if self.protocol.active_stimulus_id != multi.target_stimulus_id:
+                raise ValueError(
+                    "active_stimulus_id must match multi target_stimulus_id"
+                )
+            if sequence is not None or simultaneous is not None:
+                raise ValueError(
+                    "multi_stimulus cannot be combined with stimulus_sequence or "
                     "simultaneous_stimulus_ids"
                 )
             selected_ids = tuple(referenced)
@@ -386,6 +447,13 @@ class ExperimentConfig(StrictModel):
             ) * (
                 self.protocol.repetitions
                 * len(self.dual_stimulus.resolved_conditions)
+            )
+        if self.multi_stimulus is not None:
+            return (
+                self.multi_stimulus.target_stimulus_id,
+            ) * (
+                self.protocol.repetitions
+                * len(self.multi_stimulus.positions)
             )
         sequence = self.protocol.stimulus_sequence or (self.protocol.active_stimulus_id,)
         if not self.protocol.randomize_stimulus_sequence:

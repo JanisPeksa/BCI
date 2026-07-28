@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 
-from ssvep_bci.config.models import ExperimentConfig, TargetSide
+from ssvep_bci.config.models import ExperimentConfig, HorizontalLayout, TargetSide
 from ssvep_bci.events.bus import EventSink
 from ssvep_bci.events.models import EventSource, EventType, ProtocolEvent
 from ssvep_bci.planning.models import PlanStep, SessionPlan, StepKind
@@ -192,7 +192,32 @@ class ProtocolRuntime:
                 and self.state in {RunState.AWAITING_ONSET, RunState.RUNNING}
             )
             dual = self.config.dual_stimulus
-            if dual is not None and step.distractor_stimulus_id is not None:
+            multi = self.config.multi_stimulus
+            if multi is not None and step.position_stimulus_ids is not None:
+                scene_nodes = tuple(
+                    StimulusNode(
+                        stimulus=self._stimuli_by_id[stimulus_id],
+                        visible_requested=True,
+                        flashing_requested=flashing,
+                        highlighted=(
+                            step.kind == StepKind.PRE_STIMULUS
+                            and stimulus_id == target.id
+                        ),
+                        placement_override=StimulusPlacementOverride(
+                            width_px=multi.width_px,
+                            height_px=multi.height_px,
+                            center_x=position.center_x,
+                            center_y=position.center_y,
+                            horizontal_layout=HorizontalLayout.MANUAL,
+                        ),
+                    )
+                    for position, stimulus_id in zip(
+                        multi.positions,
+                        step.position_stimulus_ids,
+                        strict=True,
+                    )
+                )
+            elif dual is not None and step.distractor_stimulus_id is not None:
                 assert step.target_side is not None
                 distractor_side = (
                     TargetSide.RIGHT
@@ -306,22 +331,59 @@ class ProtocolRuntime:
         )
 
     def _condition_payload(self, step: PlanStep | None) -> dict:
+        if step is None or step.stimulus_id is None:
+            return {}
+        target_frequency = self._stimuli_by_id[step.stimulus_id].frequency_hz
         if (
-            step is None
-            or step.target_side is None
-            or step.distractor_stimulus_id is None
-            or step.stimulus_id is None
+            step.target_side is not None
+            and step.distractor_stimulus_id is not None
+        ):
+            distractor_frequency = self._stimuli_by_id[
+                step.distractor_stimulus_id
+            ].frequency_hz
+            return {
+                "target_frequency_hz": target_frequency,
+                "target_side": step.target_side.value,
+                "distractor_frequency_hz": distractor_frequency,
+                "distractor_stimulus_id": step.distractor_stimulus_id,
+                "stimulus_frequencies_hz": [
+                    target_frequency,
+                    distractor_frequency,
+                ],
+            }
+        multi = self.config.multi_stimulus
+        if (
+            multi is None
+            or step.target_position_id is None
+            or step.position_stimulus_ids is None
         ):
             return {}
+        distractor_ids = [
+            stimulus_id
+            for stimulus_id in step.position_stimulus_ids
+            if stimulus_id != step.stimulus_id
+        ]
+        distractor_frequencies = [
+            self._stimuli_by_id[stimulus_id].frequency_hz
+            for stimulus_id in distractor_ids
+        ]
         return {
-            "target_frequency_hz": self._stimuli_by_id[
-                step.stimulus_id
-            ].frequency_hz,
-            "target_side": step.target_side.value,
-            "distractor_frequency_hz": self._stimuli_by_id[
-                step.distractor_stimulus_id
-            ].frequency_hz,
-            "distractor_stimulus_id": step.distractor_stimulus_id,
+            "target_frequency_hz": target_frequency,
+            "target_position_id": step.target_position_id,
+            "distractor_frequencies_hz": distractor_frequencies,
+            "distractor_stimulus_ids": distractor_ids,
+            "stimulus_frequencies_hz": [
+                self._stimuli_by_id[stimulus_id].frequency_hz
+                for stimulus_id in step.position_stimulus_ids
+            ],
+            "stimulus_positions": {
+                position.id: stimulus_id
+                for position, stimulus_id in zip(
+                    multi.positions,
+                    step.position_stimulus_ids,
+                    strict=True,
+                )
+            },
         }
 
     def _emit(

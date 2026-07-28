@@ -5,6 +5,8 @@ from ssvep_bci.config.models import (
     DualStimulusConfig,
     ExperimentConfig,
     HorizontalLayout,
+    MultiStimulusConfig,
+    StimulusPositionConfig,
     TargetSide,
 )
 
@@ -15,7 +17,9 @@ __all__ = [
     "DualStimulusConfig",
     "ExperimentConfig",
     "HorizontalLayout",
+    "MultiStimulusConfig",
     "ResolvedExperiment",
+    "StimulusPositionConfig",
     "TargetSide",
     "load_experiment",
 ]

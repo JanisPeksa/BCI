@@ -236,7 +236,7 @@ def test_equal_gap_and_manual_placement_resolve_from_viewport() -> None:
 
 
 def test_synthetic_backend_contains_target_and_distractor_frequencies() -> None:
-    resolved = load_experiment(CONFIG_PATH)
+    resolved = load_experiment()
     clock = VirtualClock()
     backend = SyntheticBackend(resolved.device, clock)
     backend.prepare()
