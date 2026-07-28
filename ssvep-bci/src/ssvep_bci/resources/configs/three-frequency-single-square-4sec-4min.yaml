@@ -1,0 +1,101 @@
+schema_version: 1
+experiment_id: three-frequency-single-square-4sec-16trials
+title: Three-Frequency Single-Square Four-Second Sixteen-Trial Collection
+random_seed: 20260728
+device_profile: ../devices/cyton.yaml
+
+# One centered 200 px square is shown at a time. Each frequency appears once
+# in each randomized three-trial block. Sixteen blocks give exactly sixteen
+# 4-second presentations per frequency:
+# 3 frequencies * 16 * 4 seconds = 192 seconds.
+# A 5-second initial pause and 47 inter-presentation pauses of 3 seconds make
+# the complete planned protocol 338 seconds (5 minutes 38 seconds).
+protocol:
+  active_stimulus_id: freq-8-75
+  stimulus_sequence: [freq-8-75, freq-11-75, freq-13-75]
+  randomize_stimulus_sequence: true
+  repetitions: 16
+  acquisition_pre_roll_seconds: 0.0
+  initial_rest_seconds: 5.0
+  pre_stimulus_seconds: 0.0
+  stimulation_seconds: 4.0
+  inter_trial_seconds: 3.0
+  sequence_break_seconds: 0.0
+  final_rest_seconds: 0.0
+  acquisition_post_roll_seconds: 0.0
+
+stimuli:
+  - id: freq-8-75
+    frequency_hz: 8.75
+    duty_cycle: 0.5
+    visual:
+      shape: rectangle
+      width_px: 200
+      height_px: 200
+      center_x: 0.5
+      center_y: 0.5
+      on_color: "#FFFFFF"
+      off_color: "#000000"
+  - id: freq-11-75
+    frequency_hz: 11.75
+    duty_cycle: 0.5
+    visual:
+      shape: rectangle
+      width_px: 200
+      height_px: 200
+      center_x: 0.5
+      center_y: 0.5
+      on_color: "#FFFFFF"
+      off_color: "#000000"
+  - id: freq-13-75
+    frequency_hz: 13.75
+    duty_cycle: 0.5
+    visual:
+      shape: rectangle
+      width_px: 200
+      height_px: 200
+      center_x: 0.5
+      center_y: 0.5
+      on_color: "#FFFFFF"
+      off_color: "#000000"
+
+presentation:
+  window_mode: full_screen
+  screen_index: 0
+  background_color: "#000000"
+  theme: forced_dark
+  hide_cursor: true
+  refresh_preflight_frames: 120
+  require_timing_quality: true
+  max_frequency_error_hz: 0.25
+  max_dropped_frame_fraction: 0.02
+
+output:
+  root_dir: ../../../../sessions
+  flush_every_batch: true
+  write_checksums: true
+
+processing:
+  enabled: false
+  required: false
+  processor: fbcca
+  transport: worker_thread
+  channels: [O1, O2, Oz, PO3, PO4, P3, P4, Pz]
+  candidate_frequencies_hz: [8.75, 11.75, 13.75]
+  window: {onset_offset_seconds: 0.25, length_seconds: 3.5, wait_timeout_seconds: 2.0}
+  notch: {enabled: true, frequency_hz: 60.0, quality_factor: 30.0}
+  filter_bank: {preset: legacy_2022, subbands: 10}
+  cca: {harmonics: 2, components: 1}
+  classifier: {model_path: null, allow_unsafe_legacy_joblib: false}
+
+markers:
+  session_start: 10
+  session_complete: 11
+  session_abort: 12
+  session_failed: 13
+  trial_start: 20
+  trial_end: 21
+  stimulus_onset_base: 1000
+  stimulus_offset_base: 2000
+
+resources: {assets: {}}
