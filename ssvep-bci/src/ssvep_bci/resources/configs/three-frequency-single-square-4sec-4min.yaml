@@ -2,7 +2,7 @@ schema_version: 1
 experiment_id: three-frequency-single-square-4sec-16trials
 title: Three-Frequency Single-Square Four-Second Sixteen-Trial Collection
 random_seed: 20260728
-device_profile: ../devices/cyton.yaml
+device_profile: ../devices/synthetic.yaml
 
 # One centered 200 px square is shown at a time. Each frequency appears once
 # in each randomized three-trial block. Sixteen blocks give exactly sixteen
