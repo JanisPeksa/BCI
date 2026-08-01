@@ -60,6 +60,14 @@ for ten seconds each:
 psychopy-ssvep run --config frequency-validation --participant MONITOR_TEST
 ```
 
+To check whether additional rendering load affects the measured square, use
+`frequency-validation-with-distractors`. The 12.75 Hz photosensor target stays
+in the bottom-right while three other rectangles flicker simultaneously:
+
+```bash
+psychopy-ssvep run --config frequency-validation-with-distractors --participant MONITOR_TEST
+```
+
 Bundled configs can be selected by name, so this command works from a source
 checkout or an installed package. Use `--output-root PATH` to choose a session
 directory independently of the installation location.

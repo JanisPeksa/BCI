@@ -36,6 +36,31 @@ def test_frequency_validation_profile_can_be_loaded_by_name() -> None:
     assert resolved.config_path.name == "frequency-validation.yaml"
 
 
+def test_distractor_validation_keeps_measured_square_isolated() -> None:
+    resolved = load_experiment("frequency-validation-with-distractors")
+    plan = compile_session_plan(resolved.config)
+    stimuli = {stimulus.id: stimulus for stimulus in resolved.config.stimuli}
+    target = stimuli["measured-12-75"]
+    target_rect = target.visual.resolve_rect(1920, 1080)
+
+    assert plan.trial_count == 4
+    assert plan.duration_seconds == 54.0
+    assert target.frequency_hz == 12.75
+    assert target_rect == (1520, 680, 400, 400)
+    assert set(resolved.config.protocol.simultaneous_stimulus_ids or ()) == set(stimuli)
+    for stimulus_id, stimulus in stimuli.items():
+        if stimulus_id == target.id:
+            continue
+        left, top, width, height = stimulus.visual.resolve_rect(1920, 1080)
+        target_left, target_top, target_width, target_height = target_rect
+        assert (
+            left + width <= target_left
+            or target_left + target_width <= left
+            or top + height <= target_top
+            or target_top + target_height <= top
+        )
+
+
 def test_duplicate_stimulus_frequency_is_rejected() -> None:
     resolved = load_experiment()
     duplicate = resolved.config.active_stimulus.model_copy(update={"id": "target-2"})
