@@ -13,6 +13,9 @@ from ssvep_bci.dsp.contracts import StimulusWindow
 from ssvep_bci.events.models import ProtocolEvent
 
 
+EDGE_TOLERANCE_SECONDS = 0.025
+
+
 @dataclass(frozen=True)
 class WindowRequest:
     onset: ProtocolEvent
@@ -47,7 +50,10 @@ class SampleRingBuffer:
         with self._condition:
             while (self._times.size == 0 or self._times[-1] < end) and time.perf_counter() < deadline:
                 self._condition.wait(timeout=min(0.05, max(0.0, deadline - time.perf_counter())))
-            mask = (self._times >= start) & (self._times < end)
+            mask = (
+                (self._times >= start - EDGE_TOLERANCE_SECONDS)
+                & (self._times < end + EDGE_TOLERANCE_SECONDS)
+            )
             indexes = np.flatnonzero(mask)
             diagnostics: list[str] = []
             if indexes.size < expected_samples:
@@ -70,7 +76,9 @@ class SampleRingBuffer:
                     ),
                 )
                 indexes = indexes[best_offset:best_offset + expected_samples]
-                diagnostics.append("trimmed extra samples to expected window length")
+                diagnostics.append(
+                    "selected centered samples from edge-tolerant timestamp window"
+                )
             selected_times = self._times[indexes]
             if selected_times.size > 1 and np.any(np.diff(selected_times) <= 0):
                 diagnostics.append("sample timestamps are not strictly increasing")

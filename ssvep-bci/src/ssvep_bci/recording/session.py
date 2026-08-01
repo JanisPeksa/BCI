@@ -59,6 +59,7 @@ class SessionRecorder:
         plan: SessionPlan,
         participant_id: str,
         session_label: str | None = None,
+        run_mode: str = "run",
     ) -> None:
         if not PARTICIPANT_PATTERN.fullmatch(participant_id):
             raise ValueError("participant ID must use letters, digits, underscores, or hyphens")
@@ -68,6 +69,9 @@ class SessionRecorder:
         self.plan = plan
         self.participant_id = participant_id
         self.session_label = session_label
+        if run_mode not in {"run", "verification"}:
+            raise ValueError("run_mode must be run or verification")
+        self.run_mode = run_mode
         self.session_id = str(uuid.uuid4())
         self.created_at = datetime.now(UTC)
         name = (
@@ -101,6 +105,15 @@ class SessionRecorder:
         }
         if self._processing_file:
             self._artifacts.add("processing-results.jsonl")
+        self._verification_file = None
+        if self.run_mode == "verification":
+            self._verification_file = (self.path / "verification-results.jsonl").open(
+                "a", encoding="utf-8", newline="\n"
+            )
+            self._artifacts.update({
+                "verification-results.jsonl",
+                "verification-summary.json",
+            })
         self._write_snapshots()
         self._write_manifest("in_progress")
         self._raw.start()
@@ -148,6 +161,15 @@ class SessionRecorder:
             self._processing_file.write(serialized + "\n")
             self._processing_file.flush()
 
+    def record_verification(self, result: dict[str, Any]) -> None:
+        if self._verification_file is None:
+            raise RuntimeError("verification recording is not enabled")
+        with self._lock:
+            self._verification_file.write(
+                json.dumps(result, ensure_ascii=False) + "\n"
+            )
+            self._verification_file.flush()
+
     def health(self, kind: str, severity: str, **details: Any) -> None:
         value = {
             "schema_version": 1,
@@ -160,9 +182,16 @@ class SessionRecorder:
             self._health_file.write(json.dumps(value, ensure_ascii=False) + "\n")
             self._health_file.flush()
 
-    def finalize(self, status: str, error: str | None = None) -> None:
+    def finalize(
+        self,
+        status: str,
+        error: str | None = None,
+        verification_summary: dict[str, Any] | None = None,
+    ) -> None:
         if status not in {"complete", "aborted", "failed", "incomplete"}:
             raise ValueError(f"invalid terminal status: {status}")
+        if self.run_mode == "verification" and verification_summary is None:
+            raise ValueError("verification session requires a summary")
         with self._lock:
             if self._closed:
                 return
@@ -173,7 +202,11 @@ class SessionRecorder:
                 raw_error = str(exc)
                 status = "failed"
             for handle in (
-                self._event_file, self._marker_file, self._health_file, self._processing_file
+                self._event_file,
+                self._marker_file,
+                self._health_file,
+                self._processing_file,
+                self._verification_file,
             ):
                 if handle is not None and not handle.closed:
                     handle.flush()
@@ -196,6 +229,15 @@ class SessionRecorder:
             (self.path / "acquisition-metadata.json").write_text(
                 _json(metadata), encoding="utf-8", newline="\n"
             )
+            if self.run_mode == "verification":
+                assert verification_summary is not None
+                verification_summary = dict(verification_summary)
+                verification_summary["terminal_status"] = status
+                if error or raw_error:
+                    verification_summary["error"] = error or raw_error
+                (self.path / "verification-summary.json").write_text(
+                    _json(verification_summary), encoding="utf-8", newline="\n"
+                )
             self._write_manifest(status, error or raw_error)
             if self.resolved.config.output.write_checksums:
                 lines = [
@@ -223,6 +265,12 @@ class SessionRecorder:
                 metadata["status"] = "failed"
                 metadata["error"] = error
                 _atomic_write(metadata_path, _json(metadata))
+            verification_path = self.path / "verification-summary.json"
+            if verification_path.is_file():
+                verification = json.loads(verification_path.read_text(encoding="utf-8"))
+                verification["terminal_status"] = "failed"
+                verification["error"] = error
+                _atomic_write(verification_path, _json(verification))
             if self.resolved.config.output.write_checksums:
                 lines = [
                     f"{_sha256(self.path / name)}  {name}"
@@ -255,6 +303,7 @@ class SessionRecorder:
             "session_id": self.session_id,
             "participant_id": self.participant_id,
             "session_label": self.session_label,
+            "run_mode": self.run_mode,
             "experiment_id": self.resolved.config.experiment_id,
             "plan_id": self.plan.plan_id,
             "config_hash": self.plan.config_hash,

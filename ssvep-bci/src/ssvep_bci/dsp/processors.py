@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 
 import joblib
@@ -9,6 +10,10 @@ from sklearn.cross_decomposition import CCA
 
 from ssvep_bci.config.loader import ResolvedExperiment
 from ssvep_bci.dsp.contracts import ProcessingResult, ProcessingStatus, StimulusWindow
+from ssvep_bci.dsp.fbtdca_contract import (
+    BRAINDA_COMMIT,
+    algorithm_metadata,
+)
 from ssvep_bci.dsp.filters import bandpass, legacy_filter_bank, notch_filter
 
 
@@ -33,12 +38,17 @@ def reference_templates(
 
 
 class FbccaProcessor:
-    def __init__(self, resolved: ResolvedExperiment) -> None:
+    def __init__(
+        self, resolved: ResolvedExperiment, participant_id: str | None = None
+    ) -> None:
         self.resolved = resolved
         self.config = resolved.config.processing
+        self.participant_id = participant_id
         self.classifier = None
         self.model_frequencies: tuple[float, ...] | None = None
-        if self.config.processor in {"fbcca_knn", "cca_knn"}:
+        self.model_metadata: dict | None = None
+        self.model_sha256: str | None = None
+        if self.config.processor in {"fbcca_knn", "cca_knn", "fbtdca"}:
             self._load_classifier()
 
     def process(self, window: StimulusWindow) -> ProcessingResult:
@@ -65,6 +75,8 @@ class FbccaProcessor:
                     )
                 except Exception as exc:
                     raise FilterProcessingError(f"notch filter failed: {exc}") from exc
+            if self.config.processor == "fbtdca":
+                return self._process_fbtdca(window, eeg, started)
             templates = reference_templates(
                 window.candidate_frequencies_hz,
                 self.config.cca.harmonics,
@@ -121,6 +133,37 @@ class FbccaProcessor:
                 diagnostics=window.diagnostics + (str(exc),),
             )
 
+    def _process_fbtdca(
+        self, window: StimulusWindow, eeg: np.ndarray, started: float
+    ) -> ProcessingResult:
+        if self.classifier is None:
+            raise ValueError("FBTDCA estimator is not loaded")
+        model_input = np.array(eeg.T[np.newaxis, :, :], dtype=np.float64, copy=True)
+        transformed = np.asarray(self.classifier.transform(model_input), dtype=np.float64)
+        expected_shape = (1, len(window.candidate_frequencies_hz))
+        if transformed.shape != expected_shape:
+            raise ValueError(
+                f"FBTDCA returned score shape {transformed.shape}, expected {expected_shape}"
+            )
+        scores = transformed[0]
+        if not np.all(np.isfinite(scores)):
+            raise ValueError("FBTDCA produced non-finite scores")
+        predicted = int(np.argmax(scores))
+        return ProcessingResult(
+            window_id=window.window_id,
+            presentation_id=window.presentation_id,
+            status=ProcessingStatus.PROCESSED,
+            processor=self.config.processor,
+            elapsed_seconds=time.perf_counter() - started,
+            sample_count=window.eeg.shape[0],
+            channel_names=window.channel_names,
+            candidate_frequencies_hz=window.candidate_frequencies_hz,
+            scores=tuple(float(value) for value in scores),
+            predicted_index=predicted,
+            predicted_frequency_hz=window.candidate_frequencies_hz[predicted],
+            diagnostics=window.diagnostics,
+        )
+
     def _correlations(
         self, eeg: np.ndarray, templates: np.ndarray, sampling_rate_hz: float
     ) -> np.ndarray:
@@ -159,10 +202,16 @@ class FbccaProcessor:
         path = self.resolved.classifier_path
         if path is None:
             raise ValueError("classifier processor requires a resolved model path")
-        state = joblib.load(path)
+        try:
+            state = joblib.load(path)
+        except Exception as exc:
+            raise ValueError(f"cannot load classifier artifact {path}: {exc}") from exc
         if not isinstance(state, dict):
             raise ValueError("classifier artifact must contain a mapping")
         metadata = state.get("metadata")
+        if self.config.processor == "fbtdca":
+            self._load_fbtdca_classifier(state, metadata, path)
+            return
         if metadata is None:
             if not self.config.classifier.allow_unsafe_legacy_joblib:
                 raise ValueError(
@@ -197,6 +246,61 @@ class FbccaProcessor:
             raise ValueError("classifier frequency order does not match configuration")
         self.classifier = estimator
         self.model_frequencies = normalized
+
+    def _load_fbtdca_classifier(self, state: dict, metadata: object, path) -> None:
+        if not isinstance(metadata, dict) or metadata.get("schema_version") != 2:
+            raise ValueError("FBTDCA classifier requires metadata schema version 2")
+        if metadata.get("processor") != "fbtdca":
+            raise ValueError("classifier metadata processor is not fbtdca")
+        if metadata.get("brainda_commit") != BRAINDA_COMMIT:
+            raise ValueError("FBTDCA classifier uses an unsupported Brainda revision")
+        if metadata.get("algorithm") != algorithm_metadata():
+            raise ValueError("FBTDCA classifier algorithm settings are incompatible")
+        if self.participant_id is None:
+            raise ValueError("FBTDCA verification requires a participant ID")
+        expected = {
+            "participant_id": self.participant_id,
+            "sampling_rate_hz": self.resolved.device.sampling_rate_hz,
+            "channel_names": list(self.config.channels),
+            "candidate_frequencies_hz": list(self.config.candidate_frequencies_hz),
+            "phase_offsets_radians": [0.0] * len(self.config.candidate_frequencies_hz),
+            "window_onset_offset_seconds": self.config.window.onset_offset_seconds,
+            "window_length_seconds": self.config.window.length_seconds,
+            "notch_enabled": self.config.notch.enabled,
+            "notch_frequency_hz": self.config.notch.frequency_hz,
+            "notch_quality_factor": self.config.notch.quality_factor,
+        }
+        mismatches = [key for key, value in expected.items() if metadata.get(key) != value]
+        if mismatches:
+            raise ValueError(
+                "FBTDCA classifier metadata is incompatible: " + ", ".join(mismatches)
+            )
+        estimator = state.get("estimator")
+        if estimator is None or not all(
+            hasattr(estimator, method) for method in ("transform", "predict")
+        ):
+            raise ValueError("FBTDCA artifact has no estimator with transform()/predict()")
+        classes = tuple(int(value) for value in getattr(estimator, "classes_", ()))
+        expected_classes = tuple(range(len(self.config.candidate_frequencies_hz)))
+        if classes != expected_classes:
+            raise ValueError(
+                f"FBTDCA estimator classes {classes} do not match {expected_classes}"
+            )
+        labels = metadata.get("label_to_frequency_hz")
+        expected_labels = {
+            str(index): frequency
+            for index, frequency in enumerate(self.config.candidate_frequencies_hz)
+        }
+        if labels != expected_labels:
+            raise ValueError("FBTDCA label-to-frequency mapping is incompatible")
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        self.classifier = estimator
+        self.model_frequencies = tuple(self.config.candidate_frequencies_hz)
+        self.model_metadata = metadata
+        self.model_sha256 = digest.hexdigest()
 
     def _result(
         self,

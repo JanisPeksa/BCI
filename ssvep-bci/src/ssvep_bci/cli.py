@@ -6,7 +6,11 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from ssvep_bci.config.loader import ConfigurationError, load_experiment
+from ssvep_bci.config.loader import (
+    ConfigurationError,
+    enable_fbtdca_verification,
+    load_experiment,
+)
 from ssvep_bci.planning.compiler import compile_session_plan
 from ssvep_bci.recording.session import validate_session
 
@@ -22,6 +26,15 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--session-label")
     run.add_argument("--output-root")
     run.add_argument("--windowed", action="store_true")
+    verify = sub.add_parser(
+        "verify", help="run labeled live verification with a trained FBTDCA model"
+    )
+    verify.add_argument("--config", required=True)
+    verify.add_argument("--model", required=True)
+    verify.add_argument("--participant", required=True)
+    verify.add_argument("--session-label")
+    verify.add_argument("--output-root")
+    verify.add_argument("--windowed", action="store_true")
     session = sub.add_parser("validate-session", help="validate a recorded session")
     session.add_argument("path")
     return parser
@@ -34,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(validate_session(args.path), indent=2))
             return 0
         resolved = load_experiment(args.config)
+        verification = args.command == "verify"
+        if verification:
+            resolved = enable_fbtdca_verification(resolved, args.model)
         if args.command == "validate":
             plan = compile_session_plan(resolved.config)
             print(f"Configuration valid: {resolved.config.title}")
@@ -51,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
             args.participant,
             args.session_label,
             windowed=args.windowed,
+            verification=verification,
         )
     except (ConfigurationError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

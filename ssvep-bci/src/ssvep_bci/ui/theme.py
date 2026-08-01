@@ -12,6 +12,7 @@ QWidget {
     font-size: 18px;
 }
 QLabel#statusLabel { color: #AAB2C0; font-size: 18px; }
+QLabel#verificationLabel { color: #D6DDEA; font-size: 16px; padding: 4px; }
 QLabel#messageLabel { color: #F4F6FA; font-size: 28px; font-weight: 600; }
 QToolTip { background: #171B24; color: #F4F6FA; border: 1px solid #4D596D; }
 """
@@ -53,4 +54,3 @@ def apply_forced_theme(app: QApplication) -> None:
     app.setPalette(palette)
     app.setFont(QFont("DejaVu Sans", 12))
     app.setStyleSheet(APPLICATION_STYLESHEET)
-

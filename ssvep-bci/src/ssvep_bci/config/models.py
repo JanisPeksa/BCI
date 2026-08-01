@@ -263,7 +263,7 @@ class ClassifierConfig(StrictModel):
 class ProcessingConfig(StrictModel):
     enabled: bool = False
     required: bool = False
-    processor: Literal["fbcca", "fbcca_knn", "cca_knn"] = "fbcca"
+    processor: Literal["fbcca", "fbcca_knn", "cca_knn", "fbtdca"] = "fbcca"
     transport: Literal["worker_thread"] = "worker_thread"
     channels: tuple[str, ...] = Field(min_length=1)
     candidate_frequencies_hz: tuple[float, ...] = Field(min_length=1)
@@ -286,9 +286,11 @@ class ProcessingConfig(StrictModel):
             raise ValueError("processing candidate frequencies must be positive and finite")
         if self.enabled and len(self.candidate_frequencies_hz) < 2:
             raise ValueError("enabled processing requires at least two candidate frequencies")
-        needs_model = self.processor in {"fbcca_knn", "cca_knn"}
+        needs_model = self.processor in {"fbcca_knn", "cca_knn", "fbtdca"}
         if needs_model != (self.classifier.model_path is not None):
-            raise ValueError("classifier processors require model_path and fbcca forbids it")
+            raise ValueError(
+                "classifier processors require model_path and fbcca forbids it"
+            )
         return self
 
 

@@ -21,6 +21,7 @@ from ssvep_bci.runtime.commands import (
     RuntimeCommand,
 )
 from ssvep_bci.runtime.protocol import ProtocolRuntime, RunState, TERMINAL_STATES
+from ssvep_bci.runtime.verification import VerificationSnapshot, VerificationTracker
 
 
 class CoordinatorState(StrEnum):
@@ -57,11 +58,14 @@ class SessionCoordinator:
         session_label: str | None = None,
         clock: Clock | None = None,
         output_sink: OutputSink | None = None,
+        verification: bool = False,
     ) -> None:
         self.resolved = resolved
         self.clock = clock or RealClock()
         self.plan = compile_session_plan(resolved.config)
-        self.recorder = SessionRecorder(resolved, self.plan, participant_id, session_label)
+        self.verification = verification
+        if verification and resolved.config.processing.processor != "fbtdca":
+            raise ValueError("verification mode requires the fbtdca processor")
         max_window = (
             resolved.config.protocol.stimulation_seconds
             + resolved.config.processing.window.wait_timeout_seconds
@@ -78,6 +82,30 @@ class SessionCoordinator:
             self.ring,
             on_result=self._on_processing_result,
             on_error=self._on_background_error,
+            participant_id=participant_id,
+        )
+        self.verification_tracker: VerificationTracker | None = None
+        if verification:
+            processor = self.dsp.processor
+            if (
+                resolved.classifier_path is None
+                or processor.model_metadata is None
+                or processor.model_sha256 is None
+            ):
+                raise ValueError("verification mode requires compatible model metadata")
+            self.verification_tracker = VerificationTracker(
+                self.plan,
+                resolved.config,
+                resolved.classifier_path,
+                processor.model_sha256,
+                processor.model_metadata,
+            )
+        self.recorder = SessionRecorder(
+            resolved,
+            self.plan,
+            participant_id,
+            session_label,
+            run_mode="verification" if verification else "run",
         )
         self.acquisition = AcquisitionService(
             resolved,
@@ -178,6 +206,9 @@ class SessionCoordinator:
     def _on_processing_result(self, result: ProcessingResult) -> None:
         try:
             self.recorder.record_processing(result)
+            if self.verification_tracker is not None:
+                entry = self.verification_tracker.record(result)
+                self.recorder.record_verification(entry)
             if result.status != ProcessingStatus.PROCESSED:
                 if self.resolved.config.processing.required:
                     self._on_background_error(RuntimeError(
@@ -222,7 +253,12 @@ class SessionCoordinator:
         if cleanup_errors:
             status = "failed"
             error = "; ".join(filter(None, (error, *cleanup_errors)))
-        self.recorder.finalize(status, error)
+        summary = (
+            self.verification_tracker.summary(status)
+            if self.verification_tracker is not None
+            else None
+        )
+        self.recorder.finalize(status, error, verification_summary=summary)
         try:
             self.validation_report = validate_session(self.recorder.path)
         except Exception as exc:
@@ -235,3 +271,8 @@ class SessionCoordinator:
         )
         for callback in self._finalized_callbacks:
             callback()
+
+    def verification_snapshot(self) -> VerificationSnapshot | None:
+        if self.verification_tracker is None:
+            return None
+        return self.verification_tracker.snapshot()

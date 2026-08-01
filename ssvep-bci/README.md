@@ -143,6 +143,52 @@ automatic discovery, set `SESSION_PATH = None` and set `SESSION_ROOT` to a
 directory containing session folders; the newest compatible folder name is
 selected.
 
+## Four-frequency FBTDCA
+
+The `four-frequency-fbtdca` profile records subject-specific training data with
+four fixed 200×200 squares at 8, 9, 13, and 14 Hz. All four squares are visible;
+the red outline cues the square to attend. Frequencies are ordinary YAML values
+and may be changed, but every session used for one model must use the same
+ordered four-frequency set with zero phase offsets.
+
+The profile selects the Cyton device and records 12 balanced trials per class.
+Record at least two separate complete sessions for leave-one-session-out
+validation:
+
+```powershell
+ssvep-bci validate --config four-frequency-fbtdca
+ssvep-bci run --config four-frequency-fbtdca --participant P012 --session-label fbtdca-run-1
+ssvep-bci run --config four-frequency-fbtdca --participant P012 --session-label fbtdca-run-2
+```
+
+Install the pinned Brainda training dependency, open the notebook, set
+`PARTICIPANT_ID`, and run all cells:
+
+```powershell
+python -m pip install -e ".\ssvep-bci[training]"
+jupyter lab ".\ssvep-bci\notebooks\four_frequency_fbtdca.ipynb"
+```
+
+The notebook reads raw session CSV and frame-confirmed event timestamps,
+extracts one 3.5-second epoch beginning 0.25 seconds after each onset, performs
+leave-one-session-out validation, and writes the model plus summary below
+`ssvep-bci/models/<participant>/`.
+
+Run a labeled online verification session with the generated subject-specific
+model:
+
+```powershell
+ssvep-bci verify --config four-frequency-fbtdca `
+  --model ".\ssvep-bci\models\P012\four_frequency_fbtdca.joblib" `
+  --participant P012 --session-label fbtdca-verification
+```
+
+The live scorecard appears between trials and is hidden while the stimuli
+flicker. Verification sessions add `verification-results.jsonl` and
+`verification-summary.json`; the summary contains overall and balanced
+accuracy, the ordered confusion matrix, per-class performance, processing
+latency, and model metadata/hash.
+
 ## CLI names
 
 Installation creates the `ssvep-bci` console command. The importable Python
@@ -394,6 +440,8 @@ acquisition-metadata.json
 acquisition-markers.jsonl
 acquisition-health.jsonl
 processing-results.jsonl      # when DSP is enabled
+verification-results.jsonl    # in FBTDCA verification mode
+verification-summary.json     # in FBTDCA verification mode
 checksums.sha256              # when configured
 ```
 

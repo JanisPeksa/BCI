@@ -21,12 +21,13 @@ class DspService:
         ring: SampleRingBuffer,
         on_result: Callable[[ProcessingResult], None],
         on_error: Callable[[Exception], None],
+        participant_id: str | None = None,
     ) -> None:
         self.resolved = resolved
         self.ring = ring
         self.on_result = on_result
         self.on_error = on_error
-        self.processor = FbccaProcessor(resolved)
+        self.processor = FbccaProcessor(resolved, participant_id=participant_id)
         self._queue: queue.Queue[WindowRequest | object] = queue.Queue(maxsize=16)
         self._thread: threading.Thread | None = None
 

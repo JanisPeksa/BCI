@@ -140,3 +140,44 @@ def load_experiment(path: str | Path | None = None) -> ResolvedExperiment:
         assets=assets,
         classifier_path=classifier_path,
     )
+
+
+def enable_fbtdca_verification(
+    resolved: ResolvedExperiment, model_path: str | Path
+) -> ResolvedExperiment:
+    """Return an effective verification configuration without editing source YAML."""
+    classifier_path = Path(model_path).expanduser().resolve()
+    if not classifier_path.is_file():
+        raise ConfigurationError(f"classifier model does not exist: {classifier_path}")
+    processing_value = resolved.config.processing.model_dump(mode="python")
+    processing_value.update({
+        "enabled": True,
+        "required": True,
+        "processor": "fbtdca",
+        "classifier": {
+            "model_path": classifier_path,
+            "allow_unsafe_legacy_joblib": False,
+        },
+    })
+    config_value = resolved.config.model_dump(mode="python")
+    config_value["processing"] = processing_value
+    try:
+        config = ExperimentConfig.model_validate(config_value)
+    except ValidationError as exc:
+        raise ConfigurationError(
+            f"configuration cannot be used for FBTDCA verification:\n{exc}"
+        ) from exc
+    if len(config.processing.candidate_frequencies_hz) != 4:
+        raise ConfigurationError("FBTDCA verification requires exactly four candidates")
+    phases = tuple(stimulus.phase_offset_radians for stimulus in config.stimuli)
+    if any(abs(value) > 1e-12 for value in phases):
+        raise ConfigurationError("FBTDCA verification requires zero phase offsets")
+    return ResolvedExperiment(
+        config=config,
+        config_path=resolved.config_path,
+        device=resolved.device,
+        device_path=resolved.device_path,
+        output_root=resolved.output_root,
+        assets=resolved.assets,
+        classifier_path=classifier_path,
+    )

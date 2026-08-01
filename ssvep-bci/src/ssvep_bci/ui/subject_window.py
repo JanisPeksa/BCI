@@ -9,6 +9,10 @@ from ssvep_bci.planning.models import StepKind
 from ssvep_bci.runtime.commands import AbortSession, CloseRequested
 from ssvep_bci.runtime.coordinator import CoordinatorState, SessionCoordinator
 from ssvep_bci.runtime.view_state import ViewState
+from ssvep_bci.runtime.verification import (
+    VerificationSnapshot,
+    format_verification_scorecard,
+)
 from ssvep_bci.stimuli.opengl_renderer import StimulusRenderer
 
 
@@ -21,6 +25,12 @@ def format_trial_progress(view: ViewState) -> str:
     ):
         return ""
     return f"Trial {view.completed_trial_count}/{view.trial_count} completed"
+
+
+def should_show_verification_scorecard(
+    phase: str, snapshot: VerificationSnapshot | None
+) -> bool:
+    return snapshot is not None and phase != StepKind.STIMULUS.value
 
 
 class SubjectWindow(QWidget):
@@ -45,7 +55,12 @@ class SubjectWindow(QWidget):
         self.status = QLabel()
         self.status.setObjectName("statusLabel")
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.verification_status = QLabel()
+        self.verification_status.setObjectName("verificationLabel")
+        self.verification_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.verification_status.hide()
         layout.addWidget(self.status)
+        layout.addWidget(self.verification_status)
         layout.addWidget(self.renderer, 1)
         layout.addWidget(self.message)
         self.timer = QTimer(self)
@@ -64,6 +79,13 @@ class SubjectWindow(QWidget):
         self.renderer.set_view_state(view)
         self.message.setText(view.message)
         self.status.setText(format_trial_progress(view))
+        snapshot = self.coordinator.verification_snapshot()
+        show_verification = should_show_verification_scorecard(view.phase, snapshot)
+        if show_verification:
+            self.verification_status.setText(format_verification_scorecard(snapshot))
+            self.verification_status.show()
+        else:
+            self.verification_status.hide()
 
     def _execute_command(self, command) -> None:
         try:

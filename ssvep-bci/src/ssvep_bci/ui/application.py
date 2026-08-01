@@ -16,6 +16,7 @@ def run_application(
     session_label: str | None,
     *,
     windowed: bool = False,
+    verification: bool = False,
 ) -> int:
     surface = QSurfaceFormat()
     surface.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
@@ -43,7 +44,12 @@ def run_application(
             raise ValueError(
                 f"stimulus frequencies violate Nyquist for {refresh:g} Hz display: {details}"
             )
-    coordinator = SessionCoordinator(resolved, participant_id, session_label)
+    coordinator = SessionCoordinator(
+        resolved,
+        participant_id,
+        session_label,
+        verification=verification,
+    )
     window = SubjectWindow(coordinator, resolved)
     if resolved.config.presentation.hide_cursor:
         window.setCursor(QCursor(Qt.CursorShape.BlankCursor))
