@@ -174,6 +174,22 @@ the UI or creating a session:
 ssvep-bci validate
 ```
 
+For a short photosensor-based monitor check, use the bundled
+`frequency-validation.yaml` profile. It shows one 400 x 400 px square flush
+with the bottom-right corner at four frequencies for ten seconds each and
+records frame-confirmed event boundaries:
+
+```powershell
+ssvep-bci run --config frequency-validation --participant MONITOR_TEST
+```
+
+Bundled configs can be selected by name, so this command works from a source
+checkout or an installed package. Use `--output-root PATH` to choose a session
+directory independently of the installation location.
+
+Run the independent recorder alongside the session, then analyze it with the
+instructions in `..\ssvep-frequency-test\PHOTOSENSOR_FREQUENCY_CHECK.md`.
+
 Validate a custom experiment before using hardware:
 
 ```powershell

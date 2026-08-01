@@ -169,15 +169,7 @@ class PsychopyRenderer:
         stimulus = node.stimulus
         if node.placement_override is not None:
             return node.placement_override.resolve_rect(window_width, window_height)
-        visual = stimulus.visual
-        center_x = window_width * visual.center_x
-        center_y = window_height * visual.center_y
-        return (
-            round(center_x - visual.width_px / 2.0),
-            round(center_y - visual.height_px / 2.0),
-            visual.width_px,
-            visual.height_px,
-        )
+        return stimulus.visual.resolve_rect(window_width, window_height)
 
     def _frame_color(self, stimulus_id: str, value: float) -> object:
         if self._waveform[stimulus_id] == Waveform.SQUARE:

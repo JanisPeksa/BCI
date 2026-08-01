@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssvep-photosensor-check"
-version = "0.1.0"
-description = "Photosensor frequency check for the ssvep-bci app (Arduino light sensor + FFT analysis)"
+version = "0.2.0"
+description = "Independent photosensor frequency validation for SSVEP session folders"
 requires-python = ">=3.11"
 dependencies = [
     "pyserial==3.5",
@@ -22,11 +22,17 @@ notebook = [
     "nbformat==5.10.4",
     "ipykernel==7.3.0",
 ]
+dev = ["pytest>=8,<9"]
 
 [project.scripts]
 record-photosensor = "record_photosensor:main"
 run-photosensor-check = "run_check:main"
+ssvep-frequency-validation = "frequency_validation:main"
 
 [tool.setuptools]
 packages = ["photosensor_check"]
-py-modules = ["record_photosensor", "run_check"]
+py-modules = ["frequency_validation", "record_photosensor", "run_check"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

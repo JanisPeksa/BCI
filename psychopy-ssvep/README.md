@@ -52,6 +52,22 @@ Run a windowed synthetic dry run (no hardware needed):
 psychopy-ssvep run --participant TEST001 --windowed
 ```
 
+For photosensor-based screen validation, use the bundled profile that presents
+one 400 x 400 px square flush with the bottom-right corner at four frequencies
+for ten seconds each:
+
+```bash
+psychopy-ssvep run --config frequency-validation --participant MONITOR_TEST
+```
+
+Bundled configs can be selected by name, so this command works from a source
+checkout or an installed package. Use `--output-root PATH` to choose a session
+directory independently of the installation location.
+
+Set the profile's PsychoPy monitor name, refresh rate, and gamma to match the
+display under test. Run the independent recorder and analyzer from
+`../ssvep-frequency-test`; results are stored in the selected session folder.
+
 Run a full-screen session with a custom config and session label:
 
 ```bash

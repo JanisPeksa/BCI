@@ -55,8 +55,22 @@ def default_config_path() -> Path:
     return Path(__file__).resolve().parents[1] / "resources" / "configs" / "synthetic.yaml"
 
 
+def _config_path(path: str | Path | None) -> Path:
+    if path is None:
+        return default_config_path()
+    candidate = Path(path).expanduser()
+    if candidate.is_file():
+        return candidate.resolve()
+    if candidate.parent == Path("."):
+        name = candidate.name if candidate.suffix else f"{candidate.name}.yaml"
+        bundled = default_config_path().parent / name
+        if bundled.is_file():
+            return bundled
+    return candidate.resolve()
+
+
 def load_experiment(path: str | Path | None = None) -> ResolvedExperiment:
-    config_path = Path(path).expanduser().resolve() if path else default_config_path()
+    config_path = _config_path(path)
     config: ExperimentConfig = _validate(ExperimentConfig, _load_yaml(config_path), config_path)
     device_path = _resolve(config.device_profile, config_path.parent)
     if not device_path.is_file():

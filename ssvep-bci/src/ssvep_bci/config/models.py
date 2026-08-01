@@ -24,6 +24,11 @@ class Shape(StrEnum):
     RECTANGLE = "rectangle"
 
 
+class VisualAnchor(StrEnum):
+    CENTER = "center"
+    BOTTOM_RIGHT = "bottom_right"
+
+
 class WindowMode(StrEnum):
     FULL_SCREEN = "full_screen"
     WINDOWED = "windowed"
@@ -45,6 +50,7 @@ class VisualConfig(StrictModel):
     height_px: int = Field(gt=0)
     center_x: float = Field(ge=0, le=1)
     center_y: float = Field(ge=0, le=1)
+    anchor: VisualAnchor = VisualAnchor.CENTER
     on_color: str = Field(pattern=COLOR_PATTERN)
     off_color: str = Field(pattern=COLOR_PATTERN)
 
@@ -53,6 +59,25 @@ class VisualConfig(StrictModel):
         if self.shape == Shape.CIRCLE and self.width_px != self.height_px:
             raise ValueError("circle width_px and height_px must be equal")
         return self
+
+    def resolve_rect(
+        self, viewport_width: int, viewport_height: int
+    ) -> tuple[int, int, int, int]:
+        if self.anchor == VisualAnchor.BOTTOM_RIGHT:
+            return (
+                viewport_width - self.width_px,
+                viewport_height - self.height_px,
+                self.width_px,
+                self.height_px,
+            )
+        center_x = int(viewport_width * self.center_x)
+        center_y = int(viewport_height * self.center_y)
+        return (
+            center_x - self.width_px // 2,
+            center_y - self.height_px // 2,
+            self.width_px,
+            self.height_px,
+        )
 
 
 class StimulusConfig(StrictModel):

@@ -17,6 +17,25 @@ def test_default_configuration_and_plan_are_deterministic() -> None:
     assert [step.kind for step in first.steps].count(StepKind.STIMULUS) == 2
 
 
+def test_frequency_validation_profile_uses_bottom_right_400px_square() -> None:
+    resolved = load_experiment(
+        "src/ssvep_bci/resources/configs/frequency-validation.yaml"
+    )
+    plan = compile_session_plan(resolved.config)
+
+    assert plan.trial_count == 4
+    assert plan.duration_seconds == 54.0
+    for stimulus in resolved.config.stimuli:
+        assert stimulus.visual.resolve_rect(1920, 1080) == (1520, 680, 400, 400)
+
+
+def test_frequency_validation_profile_can_be_loaded_by_name() -> None:
+    resolved = load_experiment("frequency-validation")
+
+    assert resolved.config.experiment_id == "frequency-validation"
+    assert resolved.config_path.name == "frequency-validation.yaml"
+
+
 def test_duplicate_stimulus_frequency_is_rejected() -> None:
     resolved = load_experiment()
     duplicate = resolved.config.active_stimulus.model_copy(update={"id": "target-2"})

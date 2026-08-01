@@ -1,4 +1,4 @@
-"""Photosensor frequency check for ssvep-bci sessions."""
+"""Photosensor frequency checks for ssvep-bci and psychopy-ssvep sessions."""
 
 from photosensor_check.analysis import (
     Segment,
@@ -8,9 +8,11 @@ from photosensor_check.analysis import (
     check_harmonics,
     detect_frame_skips,
     detect_peak,
+    find_latest_session,
+    ideal_waveform,
     load_events,
     load_light_amp,
-    load_psychopy_trials,
+    load_session_trials,
     load_stimuli,
     power_spectrum,
     retime_uniform,
@@ -29,9 +31,11 @@ __all__ = [
     "check_harmonics",
     "detect_frame_skips",
     "detect_peak",
+    "find_latest_session",
+    "ideal_waveform",
     "load_events",
     "load_light_amp",
-    "load_psychopy_trials",
+    "load_session_trials",
     "load_stimuli",
     "power_spectrum",
     "retime_uniform",

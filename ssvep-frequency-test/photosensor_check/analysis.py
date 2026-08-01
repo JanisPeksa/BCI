@@ -1,4 +1,4 @@
-"""Shared helpers for the ssvep-bci photoresistor frequency check."""
+"""Shared helpers for SSVEP session photosensor frequency checks."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
+
+
+SESSION_FILES = ("manifest.json", "events.jsonl", "experiment-config.yaml")
+SUPPORTED_WAVEFORMS = {"square", "sinusoidal"}
 
 
 def _parse_wall(value: str) -> float:
@@ -25,6 +30,7 @@ class Trial:
     frequency_hz: float
     phase_offset_radians: float
     duty_cycle: float
+    waveform: str
     onset_monotonic: float
     onset_wall: float
     offset_monotonic: float | None
@@ -48,20 +54,50 @@ def load_events(session_path: str | Path) -> list[dict[str, Any]]:
     return events
 
 
-def load_stimuli(session_path: str | Path) -> dict[str, dict[str, Any]]:
-    """Return {stimulus_id: {frequency_hz, phase_offset_radians, duty_cycle}}."""
-    import yaml
+def find_latest_session(session_root: str | Path) -> Path:
+    """Return the newest session under ``session_root`` by manifest creation time.
 
+    Both ssvep-bci applications write ``created_at_utc`` when the session folder
+    is created. Session status is intentionally ignored so an active recording
+    can be selected once it has emitted usable events.
+    """
+    root = Path(session_root).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"session root is not a directory: {root}")
+
+    candidates: list[tuple[float, Path]] = []
+    for path in root.iterdir():
+        if not path.is_dir() or not all((path / name).is_file() for name in SESSION_FILES):
+            continue
+        try:
+            manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+            created_at = manifest["created_at_utc"]
+            candidates.append((_parse_wall(str(created_at)), path.resolve()))
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+    if not candidates:
+        raise ValueError(f"no usable session folders found in: {root}")
+    return max(candidates, key=lambda item: (item[0], item[1].name))[1]
+
+
+def load_stimuli(session_path: str | Path) -> dict[str, dict[str, Any]]:
+    """Load the shared stimulus metadata used by both SSVEP applications."""
     path = Path(session_path) / "experiment-config.yaml"
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return {
-        stim["id"]: {
+    if not isinstance(config, dict) or not isinstance(config.get("stimuli"), list):
+        raise ValueError(f"invalid stimulus configuration: {path}")
+    stimuli: dict[str, dict[str, Any]] = {}
+    for stim in config["stimuli"]:
+        waveform = str(stim.get("waveform", "square"))
+        if waveform not in SUPPORTED_WAVEFORMS:
+            raise ValueError(f"unsupported waveform '{waveform}' in {path}")
+        stimuli[str(stim["id"])] = {
             "frequency_hz": float(stim["frequency_hz"]),
             "phase_offset_radians": float(stim.get("phase_offset_radians", 0.0)),
             "duty_cycle": float(stim.get("duty_cycle", 0.5)),
+            "waveform": waveform,
         }
-        for stim in config["stimuli"]
-    }
+    return stimuli
 
 
 def build_trials(
@@ -84,7 +120,9 @@ def build_trials(
             if payload.get("confirmed_by_frame_swap"):
                 onsets[event["presentation_id"]] = event
         elif event.get("event_type") == "stimulus_offset":
-            offsets.setdefault(event["presentation_id"], event)
+            payload = event.get("payload") or {}
+            if payload.get("confirmed_by_frame_swap"):
+                offsets.setdefault(event["presentation_id"], event)
 
     trials: list[Trial] = []
     for presentation_id, onset in onsets.items():
@@ -98,6 +136,7 @@ def build_trials(
             frequency_hz=stim["frequency_hz"],
             phase_offset_radians=stim["phase_offset_radians"],
             duty_cycle=stim["duty_cycle"],
+            waveform=stim["waveform"],
             onset_monotonic=onset["monotonic_timestamp"],
             onset_wall=_parse_wall(onset["wall_clock_timestamp_utc"]),
             offset_monotonic=offset["monotonic_timestamp"] if offset else None,
@@ -107,57 +146,33 @@ def build_trials(
     return trials
 
 
-def load_psychopy_trials(path: str | Path) -> list[Trial]:
-    """Build Trial objects from a PsychoPy trial-log CSV.
+def load_session_trials(session_path: str | Path) -> tuple[list[Trial], float]:
+    """Load frame-confirmed trials and configured duration from a session."""
+    session = Path(session_path).expanduser().resolve()
+    missing = [name for name in SESSION_FILES if not (session / name).is_file()]
+    if missing:
+        raise ValueError(
+            f"not a compatible session folder ({', '.join(missing)} missing): {session}"
+        )
+    config = yaml.safe_load((session / "experiment-config.yaml").read_text(encoding="utf-8"))
+    try:
+        duration = float(config["protocol"]["stimulation_seconds"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid protocol duration in: {session}") from exc
+    trials = build_trials(load_events(session), load_stimuli(session), duration)
+    if not trials:
+        raise ValueError(f"session has no frame-confirmed stimulus onset events: {session}")
+    return trials, duration
 
-    The CSV has one ``kind`` column with ``onset``/``offset`` values. Onset rows
-    carry the stimulus metadata. Each onset is paired with the earliest unused
-    offset that occurs after it (temporal pairing, robust to duplicated
-    ``trial_number`` values). Times are ``time.perf_counter()``
-    (``time_monotonic``) plus wall-UTC epoch (``time_wall``) -- the same clock
-    domain as the photosensor recorder and ssvep-bci events.jsonl, so the rest
-    of the pipeline (segmentation, FFT, frame-skip, alignment) works unchanged.
-    """
-    df = pd.read_csv(path, skipinitialspace=True)
-    for col in ["time_monotonic", "time_wall", "frequency_hz",
-                "phase_offset_radians", "duty_cycle"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "trial_number" not in df.columns:
-        df["trial_number"] = 1
-    df["trial_number"] = df["trial_number"].astype(int)
 
-    offsets = (df[df["kind"] == "offset"]
-               .sort_values("time_monotonic")
-               .reset_index(drop=True))
-    offset_index = 0
-    trials: list[Trial] = []
-    onsets = df[df["kind"] == "onset"].sort_values("time_monotonic")
-    for _, onset in onsets.iterrows():
-        trial_number = int(onset["trial_number"])
-        offset = None
-        while offset_index < len(offsets):
-            candidate = offsets.iloc[offset_index]
-            if candidate["time_monotonic"] > onset["time_monotonic"]:
-                offset = candidate
-                break
-            offset_index += 1
-        if offset is not None:
-            offset_index += 1
-        trials.append(Trial(
-            presentation_id=f"trial-{trial_number}",
-            trial_number=trial_number,
-            stimulus_id=str(onset.get("stimulus_id", "stimulus")),
-            frequency_hz=float(onset["frequency_hz"]),
-            phase_offset_radians=float(onset.get("phase_offset_radians", 0.0)),
-            duty_cycle=float(onset.get("duty_cycle", 0.5)),
-            onset_monotonic=float(onset["time_monotonic"]),
-            onset_wall=float(onset["time_wall"]),
-            offset_monotonic=float(offset["time_monotonic"]) if offset is not None else None,
-            offset_wall=float(offset["time_wall"]) if offset is not None else None,
-        ))
-    trials.sort(key=lambda trial: trial.onset_monotonic)
-    return trials
+def ideal_waveform(trial: Trial, timestamps: np.ndarray) -> np.ndarray:
+    """Return the configured ideal waveform in the normalized range [-1, 1]."""
+    elapsed = np.asarray(timestamps, dtype=float) - trial.onset_monotonic
+    phase = 2.0 * np.pi * trial.frequency_hz * elapsed + trial.phase_offset_radians
+    if trial.waveform == "sinusoidal":
+        return np.sin(phase)
+    cycles = np.mod(phase / (2.0 * np.pi), 1.0)
+    return np.where(cycles < trial.duty_cycle, 1.0, -1.0)
 
 
 def load_light_amp(path: str | Path) -> pd.DataFrame:
@@ -473,6 +488,7 @@ def summarize(
             "trial_number": trial.trial_number,
             "presentation_id": trial.presentation_id,
             "stimulus_id": trial.stimulus_id,
+            "waveform": trial.waveform,
             "target_hz": trial.frequency_hz,
             "detected_hz": peak,
             "delta_hz": None if peak is None else peak - trial.frequency_hz,

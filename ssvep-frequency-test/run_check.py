@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
-"""Headless photosensor frequency check for an ssvep-bci or PsychoPy session.
+"""Analyze a photosensor recording against an SSVEP session.
 
-Combines trial timing (an ssvep-bci session folder's events.jsonl, or a
-PsychoPy trial-log CSV) with the light data captured by record_photosensor.py
-and writes:
-
-    summary.csv            per-trial target/detected frequency table
-    time_domain.png        per-trial waveform strips (frame-skip inspection)
-    fft_classes.png        FFT overlay per (frequency, phase) class
+The session may come from ssvep-bci or psychopy-ssvep. Results and a copy of
+the photosensor input are written to ``<session>/photosensor-check``.
 
 Usage:
-    python run_check.py --session <session_dir> --light <light_amp.csv>
-    python run_check.py --psychopy-trials <trial_times.csv> --light <light_amp.csv>
-        [--latency 0.07] [--out <report_dir>]
+    run-photosensor-check --session <session_dir> --light <light_amp.csv>
+    run-photosensor-check --latest --session-root <sessions_dir> --light <light_amp.csv>
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -27,15 +22,13 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-import yaml  # noqa: E402
 
 from photosensor_check.analysis import (  # noqa: E402
-    build_trials,
     detect_peak,
-    load_events,
+    find_latest_session,
+    ideal_waveform,
     load_light_amp,
-    load_psychopy_trials,
-    load_stimuli,
+    load_session_trials,
     power_spectrum,
     retime_uniform,
     sampling_diagnostics,
@@ -46,24 +39,48 @@ from photosensor_check.analysis import (  # noqa: E402
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--session", default=None,
-                        help="path to an ssvep-bci session folder (events.jsonl + experiment-config.yaml)")
-    parser.add_argument("--psychopy-trials", default=None,
-                        help="PsychoPy trial-log CSV with onset/offset rows "
-                             "(kind, time_monotonic, time_wall, trial_number, ...)")
-    parser.add_argument("--light", required=True, help="path to light_amp.csv from record_photosensor.py")
-    parser.add_argument("--latency", type=float, default=0.07,
-                        help="serial-latency fudge added to every trial window (s)")
-    parser.add_argument("--out", default=".",
-                        help="directory for summary.csv and figures")
-    parser.add_argument("--tolerance-hz", type=float, default=0.25,
-                        help="max |detected - target| for a PASS")
-    return parser.parse_args()
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--session",
+        help="ssvep-bci or psychopy-ssvep session folder",
+    )
+    source.add_argument(
+        "--latest",
+        action="store_true",
+        help="use the newest compatible session under --session-root",
+    )
+    parser.add_argument(
+        "--session-root",
+        help="directory whose direct children are session folders (required with --latest)",
+    )
+    parser.add_argument(
+        "--light",
+        required=True,
+        help="light_amp.csv produced by record-photosensor",
+    )
+    parser.add_argument(
+        "--latency",
+        type=float,
+        default=0.07,
+        help="serial latency added to every trial window (seconds)",
+    )
+    parser.add_argument(
+        "--tolerance-hz",
+        type=float,
+        default=0.25,
+        help="maximum absolute detected-frequency error for PASS",
+    )
+    args = parser.parse_args(argv)
+    if args.latest and not args.session_root:
+        parser.error("--latest requires --session-root")
+    if args.session and args.session_root:
+        parser.error("--session-root can only be used with --latest")
+    return args
 
 
 def _plot_time_domain(segments) -> plt.Figure:
@@ -79,17 +96,23 @@ def _plot_time_domain(segments) -> plt.Figure:
         hi = float(segment.x.max())
         mid = 0.5 * (lo + hi)
         amp = 0.5 * (hi - lo)
-        ideal = mid + amp * np.sin(2 * np.pi * trial.frequency_hz
-                                   * (segment.t - trial.onset_monotonic))
-        ax.plot(segment.t - t0, segment.x, color="black", lw=1.2,
-                label="measured")
-        ax.plot(segment.t - t0, ideal, color="#e67e22", lw=1.0, alpha=0.9,
-                label="ideal")
-        ax.set_xlim(0, segment.t[-1] - t0)
+        ideal = mid + amp * ideal_waveform(trial, segment.t)
+        ax.plot(segment.t - t0, segment.x, color="black", lw=1.2, label="measured")
+        ax.plot(
+            segment.t - t0,
+            ideal,
+            color="#e67e22",
+            lw=1.0,
+            alpha=0.9,
+            label=f"ideal {trial.waveform}",
+        )
+        ax.set_xlim(0, max(float(segment.t[-1] - t0), 1e-9))
         margin = (hi - lo) * 0.06 if hi > lo else 1.0
         ax.set_ylim(lo - margin, hi + margin)
-        ax.set_title(f"trial {trial.trial_number} {trial.stimulus_id} "
-                     f"target={trial.frequency_hz:.2f} Hz")
+        ax.set_title(
+            f"trial {trial.trial_number} {trial.stimulus_id} "
+            f"target={trial.frequency_hz:.2f} Hz"
+        )
         ax.set_xlabel("time (s)")
         ax.set_ylabel("light_amp")
         ax.legend(loc="upper right", fontsize=8)
@@ -98,116 +121,145 @@ def _plot_time_domain(segments) -> plt.Figure:
 
 
 def _plot_fft_classes(segments, sfreq: float) -> plt.Figure:
-    nonempty = [s for s in segments if len(s.x) > 0]
+    nonempty = [segment for segment in segments if len(segment.x) > 0]
     fig, ax = plt.subplots(figsize=(12, 6))
     if not nonempty:
         ax.text(0.5, 0.5, "no light data in any trial window", ha="center")
         return fig
-    nfft = max(len(s.x) for s in nonempty)
-    classes: dict[tuple[str, float, float], list] = {}
+    nfft = max(len(segment.x) for segment in nonempty)
+    classes: dict[tuple[str, float, float, str], list] = {}
     for segment in nonempty:
         trial = segment.trial
-        key = (trial.stimulus_id, trial.frequency_hz, trial.phase_offset_radians)
+        key = (
+            trial.stimulus_id,
+            trial.frequency_hz,
+            trial.phase_offset_radians,
+            trial.waveform,
+        )
         freqs, psd = power_spectrum(segment.x, sfreq, nfft=nfft)
         classes.setdefault(key, []).append((freqs, psd))
-    for (stimulus_id, target, phase), spectra in sorted(classes.items()):
+    for (stimulus_id, target, _phase, waveform), spectra in sorted(classes.items()):
         freqs = spectra[0][0]
-        mean = np.mean([p for _, p in spectra], axis=0)
+        mean = np.mean([psd for _, psd in spectra], axis=0)
         band = (freqs >= 1) & (freqs <= 40)
-        ax.plot(freqs[band], mean[band], lw=1.0,
-                label=f"{stimulus_id} ({target:.2f} Hz)")
+        ax.plot(
+            freqs[band],
+            mean[band],
+            lw=1.0,
+            label=f"{stimulus_id} ({target:.2f} Hz, {waveform})",
+        )
         peak = detect_peak(freqs, mean)
         if peak is not None:
             ax.axvline(peak, ls=":", lw=0.8, alpha=0.6)
     ax.set_xlim(1, 40)
     ax.set_xlabel("frequency (Hz)")
     ax.set_ylabel("mean PSD")
-    ax.set_title("FFT per (frequency, phase) class")
+    ax.set_title("FFT per stimulus class")
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     return fig
 
 
-def main() -> int:
-    args = parse_args()
-    if not args.session and not args.psychopy_trials:
-        sys.exit("error: provide --session or --psychopy-trials")
-    if not Path(args.light).is_file():
-        sys.exit(f"error: light data not found: {args.light}")
+def _copy_input(source: Path, destination: Path) -> bool:
+    """Copy one input unless it already is the session-local destination."""
+    if source.resolve() == destination.resolve():
+        return False
+    shutil.copy2(source, destination)
+    return True
 
-    if args.psychopy_trials:
-        trials = load_psychopy_trials(args.psychopy_trials)
-        if not trials:
-            sys.exit(f"error: no onset rows found in {args.psychopy_trials}")
-        duration = 5.0
-    else:
-        session = Path(args.session)
-        if not (session / "events.jsonl").is_file():
-            sys.exit(f"error: {session} is not a session folder (no events.jsonl)")
-        events = load_events(session)
-        stimuli = load_stimuli(session)
-        config = yaml.safe_load((session / "experiment-config.yaml").read_text(encoding="utf-8"))
-        duration = float((config.get("protocol") or {}).get("stimulation_seconds", 5.0))
-        trials = build_trials(events, stimuli, default_duration_seconds=duration)
 
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+def _run(args: argparse.Namespace) -> int:
+    session = (
+        find_latest_session(args.session_root)
+        if args.latest
+        else Path(args.session).expanduser().resolve()
+    )
+    light_path = Path(args.light).expanduser().resolve()
+    if not light_path.is_file():
+        raise ValueError(f"light data not found: {light_path}")
 
-    frame = load_light_amp(args.light)
+    print(f"session: {session}")
+    trials, duration = load_session_trials(session)
+    frame = load_light_amp(light_path)
 
     diagnostics = sampling_diagnostics(frame)
     if diagnostics["gap_count"]:
-        print(f"note: {diagnostics['gap_count']} serial stall(s) totaling "
-              f"{diagnostics['gap_seconds']:.2f}s; sample rate computed over "
-              f"active time only")
+        print(
+            f"note: {diagnostics['gap_count']} serial stall(s) totaling "
+            f"{diagnostics['gap_seconds']:.2f}s; sample rate computed over active time only"
+        )
     if diagnostics["bursty"]:
-        print(f"note: serial reads were bursty (median-rate "
-              f"{diagnostics['median_rate_hz']:.0f} Hz vs span-rate "
-              f"{diagnostics['span_rate_hz']:.0f} Hz); using span-rate "
-              f"{diagnostics['active_rate_hz']:.0f} Hz on a uniform timeline")
+        print(
+            f"note: serial reads were bursty (median-rate "
+            f"{diagnostics['median_rate_hz']:.0f} Hz vs span-rate "
+            f"{diagnostics['span_rate_hz']:.0f} Hz); using active-rate "
+            f"{diagnostics['active_rate_hz']:.0f} Hz on a uniform timeline"
+        )
 
     sfreq, frame = retime_uniform(frame)
-
     quality = signal_quality(frame["light_amp"].to_numpy())
     if not quality["has_contrast"]:
-        print("WARNING: light_amp has almost no contrast "
-              f"(p05={quality['p05']:.0f}, p95={quality['p95']:.0f}); "
-              "the sensor may be saturated or not on the flickering stimulus")
+        print(
+            "WARNING: light_amp has almost no contrast "
+            f"(p05={quality['p05']:.0f}, p95={quality['p95']:.0f}); "
+            "the sensor may be saturated or off the flickering stimulus"
+        )
 
-    segments = segment_trials(frame, trials, latency=args.latency,
-                              default_duration=duration)
+    segments = segment_trials(frame, trials, latency=args.latency, default_duration=duration)
     summary = summarize(segments, sfreq, tolerance_hz=args.tolerance_hz)
     alignment = verify_alignment(frame, trials)
 
+    out = session / "photosensor-check"
+    out.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out / "summary.csv", index=False)
-    _plot_time_domain(segments).savefig(out / "time_domain.png", dpi=110)
-    _plot_fft_classes(segments, sfreq).savefig(out / "fft_classes.png", dpi=110)
+    time_figure = _plot_time_domain(segments)
+    time_figure.savefig(out / "time_domain.png", dpi=110)
+    plt.close(time_figure)
+    fft_figure = _plot_fft_classes(segments, sfreq)
+    fft_figure.savefig(out / "fft_classes.png", dpi=110)
+    plt.close(fft_figure)
+    _copy_input(light_path, out / "light_amp.csv")
+    sync_path = light_path.with_name("photosensor_sync.csv")
+    if sync_path.is_file():
+        _copy_input(sync_path, out / "photosensor_sync.csv")
 
     empty = int((summary["samples"] == 0).sum())
-    print(f"sample rate ~ {sfreq:.0f} Hz  |  trials: {len(trials)}  "
-          f"(empty windows: {empty})")
-    print(f"median |delta| = {summary['delta_hz'].dropna().abs().median():.4f} Hz")
-    if "amp_delta" in summary:
-        def _fmt(value: float) -> str:
-            return "-" if not np.isfinite(value) else f"{value:.0f}"
-        print("per-trial light deltas (amp_p05 -> amp_p95): "
-              f"[{', '.join(_fmt(v) for v in summary['amp_p05'])}] -> "
-              f"[{', '.join(_fmt(v) for v in summary['amp_p95'])}]")
+    print(f"sample rate ~ {sfreq:.0f} Hz  |  trials: {len(trials)} (empty windows: {empty})")
+    median_delta = summary["delta_hz"].dropna().abs().median()
+    print(f"median |delta| = {median_delta:.4f} Hz")
+
+    def _fmt(value: float) -> str:
+        return "-" if not np.isfinite(value) else f"{value:.0f}"
+
+    print(
+        "per-trial light deltas (amp_p05 -> amp_p95): "
+        f"[{', '.join(_fmt(value) for value in summary['amp_p05'])}] -> "
+        f"[{', '.join(_fmt(value) for value in summary['amp_p95'])}]"
+    )
     passed = int(summary["pass"].sum())
     failed = int((~summary["pass"]).sum())
     print(f"PASS {passed} / FAIL {failed}")
     if failed:
-        bad = summary.loc[~summary["pass"],
-                          ["trial_number", "stimulus_id", "target_hz",
-                           "detected_hz", "delta_hz"]]
+        columns = ["trial_number", "stimulus_id", "target_hz", "detected_hz", "delta_hz"]
         print("failed trials:")
-        print(bad.to_string(index=False))
-    if alignment["residual_ms"].std() > 5.0:
-        print("warning: wall-clock vs monotonic alignment residuals are spread "
-              f"by {alignment['residual_ms'].std():.1f} ms -- check clocks")
-    print(f"wrote {out / 'summary.csv'}, {out / 'time_domain.png'}, "
-          f"{out / 'fft_classes.png'}")
+        print(summary.loc[~summary["pass"], columns].to_string(index=False))
+    residual_spread = alignment["residual_ms"].std()
+    if np.isfinite(residual_spread) and residual_spread > 5.0:
+        print(
+            "warning: wall-clock vs monotonic alignment residuals are spread "
+            f"by {residual_spread:.1f} ms -- check clocks"
+        )
+    print(f"results: {out}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        return _run(args)
+    except (KeyError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

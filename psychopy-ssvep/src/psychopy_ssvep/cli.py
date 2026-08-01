@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 from psychopy_ssvep.config.loader import ConfigurationError, load_experiment
 from psychopy_ssvep.planning.compiler import compile_session_plan
@@ -18,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--config")
     run.add_argument("--participant", required=True)
     run.add_argument("--session-label")
+    run.add_argument("--output-root")
     run.add_argument("--windowed", action="store_true")
     session = sub.add_parser("validate-session", help="validate a recorded session")
     session.add_argument("path")
@@ -37,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Device: {resolved.device.profile_id} ({resolved.device.backend})")
             print(f"Plan: {plan.trial_count} trial(s), {plan.duration_seconds:g} seconds")
             return 0
+        if args.output_root:
+            resolved = replace(
+                resolved,
+                output_root=Path(args.output_root).expanduser().resolve(),
+            )
         from psychopy_ssvep.presentation.loop import run_session
 
         return run_session(

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Free-running photoresistor recorder for the ssvep-bci frequency check.
+"""Independent free-running photoresistor recorder for SSVEP frequency checks.
 
 Reads one newline-terminated ASCII sample (the raw 10-bit ``analogRead``,
 0-1023) per loop iteration from an Arduino running
 `arduino_light_sensor_sketch` and timestamps every line on the PC with
 `time.perf_counter()` -- the exact clock the ssvep-bci app uses for its
-`events.jsonl` monotonic timestamps -- plus wall-clock UTC for cross-validation.
+`events.jsonl` monotonic timestamps written by ssvep-bci and psychopy-ssvep --
+plus wall-clock UTC for cross-validation.
 
-The recorder is standalone: start it before `ssvep-bci run`, stop it after the
-session ends, then run the analysis against the session folder.
+The recorder is standalone: start it before either experiment app, stop it
+after the session ends, then run the analysis against the session folder.
 
 Usage:
     python record_photosensor.py --port /dev/ttyACM0 --out ./measurement_01
@@ -28,7 +29,7 @@ except ImportError as exc:  # pragma: no cover
     sys.exit("error: pyserial is required (python -m pip install pyserial)")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -45,7 +46,7 @@ def parse_args() -> argparse.Namespace:
                         help="flush light_amp.csv in batches of this many rows")
     parser.add_argument("--seconds", type=float, default=None,
                         help="stop automatically after N seconds (default: run until Ctrl-C)")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _append_sync(path: Path, kind: str, t_mono: float, t_wall: float) -> None:
@@ -53,8 +54,8 @@ def _append_sync(path: Path, kind: str, t_mono: float, t_wall: float) -> None:
         csv.writer(handle).writerow([kind, f"{t_mono:.12f}", f"{t_wall:.12f}"])
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     light_path = out / "light_amp.csv"
