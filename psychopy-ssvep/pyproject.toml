@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psychopy-ssvep"
+version = "0.1.0"
+description = "Configurable, modular SSVEP experiment with PsychoPy presentation, EEG acquisition, and session recording"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26,<3",
+    "psychopy>=2024.2",
+    "pydantic>=2.8,<3",
+    "PyYAML>=6,<7",
+    "scipy>=1.13,<2",
+]
+
+[project.optional-dependencies]
+acquisition = [
+    "brainflow>=5.16,<6",
+    "pyserial>=3.5,<4",
+]
+all = [
+    "brainflow>=5.16,<6",
+    "pyserial>=3.5,<4",
+]
+
+[project.scripts]
+psychopy-ssvep = "psychopy_ssvep.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+psychopy_ssvep = ["resources/**/*.yaml"]

@@ -1,0 +1,23 @@
+schema_version: 1
+profile_id: cyton-occipital-8ch
+backend: brainflow
+sampling_rate_hz: 250
+channels:
+  - { id: o1, label: O1, unit: uV, source_index: 1 }
+  - { id: o2, label: O2, unit: uV, source_index: 2 }
+  - { id: oz, label: Oz, unit: uV, source_index: 3 }
+  - { id: po3, label: PO3, unit: uV, source_index: 4 }
+  - { id: po4, label: PO4, unit: uV, source_index: 5 }
+  - { id: p3, label: P3, unit: uV, source_index: 6 }
+  - { id: p4, label: P4, unit: uV, source_index: 7 }
+  - { id: pz, label: Pz, unit: uV, source_index: 8 }
+reference: linked mastoids
+ground: Cyton BIAS
+connection:
+  kind: brainflow
+  board_id: 0
+  serial_port: auto
+  streamer_params: ""
+  ring_buffer_samples: 450000
+  poll_interval_seconds: 0.02
+  read_chunk_samples: 1024

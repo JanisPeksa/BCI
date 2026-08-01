@@ -1,0 +1,64 @@
+schema_version: 1
+experiment_id: single-square-sinusoidal
+title: Single-Square Sinusoidal SSVEP Recording
+random_seed: 20260723
+device_profile: ../devices/synthetic.yaml
+protocol:
+  active_stimulus_id: target-1
+  repetitions: 3
+  acquisition_pre_roll_seconds: 1.0
+  initial_rest_seconds: 1.0
+  pre_stimulus_seconds: 1.0
+  stimulation_seconds: 5.0
+  inter_trial_seconds: 1.0
+  final_rest_seconds: 1.0
+  acquisition_post_roll_seconds: 1.0
+stimuli:
+  - id: target-1
+    frequency_hz: 12.0
+    phase_offset_radians: 0.0
+    duty_cycle: 0.5
+    waveform: sinusoidal
+    visual:
+      shape: rectangle
+      width_px: 200
+      height_px: 200
+      center_x: 0.5
+      center_y: 0.5
+      on_color: "#FFFFFF"
+      off_color: "#000000"
+presentation:
+  window_mode: full_screen
+  screen_index: 0
+  background_color: "#808080"
+  hide_cursor: true
+  refresh_preflight_frames: 120
+  require_timing_quality: true
+  max_frequency_error_hz: 0.25
+  max_dropped_frame_fraction: 0.02
+  psychopy:
+    monitor_name: SSVEP_144Hz
+    gamma: 2.169
+    refresh_rate_hz: 144.0
+    use_retina: false
+    allow_gui: false
+    check_timing: true
+    units: pix
+    message_color: "#808080"
+    message_height_px: 40
+    cue_border_color: "#FF3040"
+    cue_border_width_px: 8
+output:
+  root_dir: sessions
+  flush_every_batch: true
+  write_checksums: true
+markers:
+  session_start: 10
+  session_complete: 11
+  session_abort: 12
+  session_failed: 13
+  trial_start: 20
+  trial_end: 21
+  stimulus_onset_base: 1000
+  stimulus_offset_base: 2000
+resources: { assets: {} }
