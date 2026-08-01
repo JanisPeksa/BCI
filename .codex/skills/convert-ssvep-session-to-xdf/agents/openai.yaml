@@ -1,0 +1,4 @@
+interface:
+  display_name: "Convert SSVEP Session to XDF"
+  short_description: "Convert SSVEP recordings to validated XDF"
+  default_prompt: "Use $convert-ssvep-session-to-xdf to convert this SSVEP session to a validated sibling XDF without changing the source folder."
