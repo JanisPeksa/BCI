@@ -183,6 +183,12 @@ def _run(args: argparse.Namespace) -> int:
     frame = load_light_amp(light_path)
 
     diagnostics = sampling_diagnostics(frame)
+    if diagnostics["timing_source"] == "device":
+        print(
+            f"device timing: {diagnostics['device_rate_hz']:.2f} Hz; "
+            f"host receipt rate: {diagnostics['span_rate_hz']:.2f} Hz; "
+            f"missing samples: {diagnostics['missing_device_samples']}"
+        )
     if diagnostics["gap_count"]:
         print(
             f"note: {diagnostics['gap_count']} serial stall(s) totaling "

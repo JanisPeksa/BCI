@@ -1,16 +1,13 @@
 schema_version: 1
-experiment_id: frequency-validation-with-distractors
-title: Monitor Frequency Validation with Distractors
+experiment_id: frequency-validation
+title: Monitor Frequency Validation at 12.75 Hz
 random_seed: 20260801
-device_profile: ../devices/synthetic.yaml
+device_profile: ../../devices/synthetic.yaml
 
-# The photosensor remains on the 12.75 Hz bottom-right square. Three other
-# 400 x 400 px squares flash simultaneously to expose rendering interference.
+# The photosensor stays on this 400 x 400 px bottom-right square for two trials.
 protocol:
-  active_stimulus_id: measured-12-75
-  simultaneous_stimulus_ids:
-    [distractor-8-25, distractor-9-75, distractor-14-25, measured-12-75]
-  repetitions: 4
+  active_stimulus_id: freq-12-75
+  repetitions: 2
   acquisition_pre_roll_seconds: 0.0
   initial_rest_seconds: 3.0
   pre_stimulus_seconds: 1.0
@@ -21,43 +18,7 @@ protocol:
   acquisition_post_roll_seconds: 0.0
 
 stimuli:
-  - id: distractor-8-25
-    frequency_hz: 8.25
-    phase_offset_radians: 0.0
-    duty_cycle: 0.5
-    visual:
-      shape: rectangle
-      width_px: 400
-      height_px: 400
-      center_x: 0.2
-      center_y: 0.25
-      on_color: "#FFFFFF"
-      off_color: "#000000"
-  - id: distractor-9-75
-    frequency_hz: 9.75
-    phase_offset_radians: 0.0
-    duty_cycle: 0.5
-    visual:
-      shape: rectangle
-      width_px: 400
-      height_px: 400
-      center_x: 0.5
-      center_y: 0.25
-      on_color: "#FFFFFF"
-      off_color: "#000000"
-  - id: distractor-14-25
-    frequency_hz: 14.25
-    phase_offset_radians: 0.0
-    duty_cycle: 0.5
-    visual:
-      shape: rectangle
-      width_px: 400
-      height_px: 400
-      center_x: 0.8
-      center_y: 0.25
-      on_color: "#FFFFFF"
-      off_color: "#000000"
-  - id: measured-12-75
+  - id: freq-12-75
     frequency_hz: 12.75
     phase_offset_radians: 0.0
     duty_cycle: 0.5
@@ -83,7 +44,7 @@ presentation:
   max_dropped_frame_fraction: 0.02
 
 output:
-  root_dir: ../../../../sessions
+  root_dir: ../../../../../sessions
   flush_every_batch: true
   write_checksums: true
 
@@ -93,7 +54,7 @@ processing:
   processor: fbcca
   transport: worker_thread
   channels: [O1, O2, Oz, PO3, PO4, P3, P4, Pz]
-  candidate_frequencies_hz: [8.25, 9.75, 12.75, 14.25]
+  candidate_frequencies_hz: [12.75]
   window: {onset_offset_seconds: 0.25, length_seconds: 9.5, wait_timeout_seconds: 2.0}
   notch: {enabled: true, frequency_hz: 60.0, quality_factor: 30.0}
   filter_bank: {preset: legacy_2022, subbands: 10}

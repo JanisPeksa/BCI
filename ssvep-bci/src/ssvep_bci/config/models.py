@@ -352,10 +352,6 @@ class ExperimentConfig(StrictModel):
                     + ", ".join(unknown)
                 )
         selected_ids = sequence or (self.protocol.active_stimulus_id,)
-        if simultaneous is not None and not set(selected_ids).issubset(simultaneous):
-            raise ValueError(
-                "every stimulus_sequence target must be in simultaneous_stimulus_ids"
-            )
         if self.protocol.randomize_stimulus_sequence and sequence is None:
             raise ValueError(
                 "randomize_stimulus_sequence requires stimulus_sequence"

@@ -4,14 +4,20 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import yaml
 
 from photosensor_check.analysis import (
     build_trials,
+    calibrate_sfreq,
+    detect_peak,
     find_latest_session,
     ideal_waveform,
     load_session_trials,
+    power_spectrum,
+    retime_uniform,
+    sampling_diagnostics,
 )
 
 
@@ -122,3 +128,47 @@ def test_find_latest_session_uses_manifest_time_and_allows_any_status(tmp_path: 
 def test_find_latest_session_rejects_empty_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no usable session"):
         find_latest_session(tmp_path)
+
+
+def test_device_timing_is_independent_of_slow_host_receipts() -> None:
+    sample_index = np.arange(8000)
+    device_time_us = sample_index * 2500
+    device_time = device_time_us * 1e-6
+    # Simulate a host reader that drains a 400 Hz device stream at only 340 Hz.
+    host_time = 100.0 + sample_index / 340.0
+    frame = pd.DataFrame({
+        "time_monotonic": host_time,
+        "time_wall": 1_800_000_000.0 + host_time,
+        "light_amp": np.sin(2 * np.pi * 12.75 * device_time),
+        "sample_index": sample_index,
+        "device_time_us": device_time_us,
+    })
+
+    diagnostics = sampling_diagnostics(frame)
+    sfreq, retimed = retime_uniform(frame)
+
+    assert diagnostics["timing_source"] == "device"
+    assert diagnostics["span_rate_hz"] == pytest.approx(340.0)
+    assert diagnostics["device_rate_hz"] == pytest.approx(400.0)
+    assert diagnostics["missing_device_samples"] == 0
+    assert calibrate_sfreq(frame) == pytest.approx(400.0)
+    assert sfreq == pytest.approx(400.0)
+    assert retimed["time_monotonic"].iloc[-1] - retimed["time_monotonic"].iloc[0] \
+        == pytest.approx(device_time[-1])
+    freqs, psd = power_spectrum(retimed["light_amp"].to_numpy(), sfreq)
+    assert detect_peak(freqs, psd) == pytest.approx(12.75, abs=0.02)
+
+
+def test_device_timing_handles_micros_wrap_and_missing_index() -> None:
+    frame = pd.DataFrame({
+        "time_monotonic": [100.0, 100.003, 100.006, 100.009],
+        "time_wall": [200.0, 200.003, 200.006, 200.009],
+        "light_amp": [0, 1, 0, 1],
+        "sample_index": [10, 11, 13, 14],
+        "device_time_us": [2**32 - 5000, 2**32 - 2500, 0, 2500],
+    })
+
+    diagnostics = sampling_diagnostics(frame)
+
+    assert diagnostics["device_rate_hz"] == pytest.approx(400.0)
+    assert diagnostics["missing_device_samples"] == 1

@@ -64,11 +64,23 @@ def _config_path(path: str | Path | None) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_file():
         return candidate.resolve()
-    if candidate.parent == Path("."):
-        name = candidate.name if candidate.suffix else f"{candidate.name}.yaml"
-        bundled = default_config_path().parent / name
+    if not candidate.is_absolute() and ".." not in candidate.parts:
+        bundled_root = default_config_path().parent
+        bundled = bundled_root / candidate
+        if not bundled.suffix:
+            bundled = bundled.with_suffix(".yaml")
         if bundled.is_file():
-            return bundled
+            return bundled.resolve()
+
+        aliases = {
+            "frequency-validation": Path("frequency-validation/12-75.yaml"),
+            "frequency-validation-with-distractors": Path(
+                "frequency-validation/with-distractors.yaml"
+            ),
+        }
+        alias = aliases.get(candidate.as_posix())
+        if alias is not None and (bundled_root / alias).is_file():
+            return (bundled_root / alias).resolve()
     return candidate.resolve()
 
 

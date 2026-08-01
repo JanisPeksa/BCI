@@ -176,12 +176,55 @@ def ideal_waveform(trial: Trial, timestamps: np.ndarray) -> np.ndarray:
 
 
 def load_light_amp(path: str | Path) -> pd.DataFrame:
-    """Load light_amp.csv (time_monotonic, time_wall, light_amp)."""
+    """Load host timestamps, light amplitude, and optional device timing."""
     frame = pd.read_csv(path, skipinitialspace=True)
     frame["time_monotonic"] = frame["time_monotonic"].astype(float)
     frame["time_wall"] = frame["time_wall"].astype(float)
     frame["light_amp"] = frame["light_amp"].astype(float)
+    for column in ("sample_index", "device_time_us"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame
+
+
+def _has_device_timing(frame: pd.DataFrame) -> bool:
+    required = {"sample_index", "device_time_us"}
+    return required.issubset(frame.columns) and bool(
+        frame[["sample_index", "device_time_us"]].notna().all(axis=1).all()
+    )
+
+
+def _unwrap_uint32(values: np.ndarray, label: str) -> np.ndarray:
+    """Unwrap an unsigned 32-bit Arduino counter into a monotonic float array."""
+    raw = np.asarray(values, dtype=np.float64)
+    if len(raw) == 0:
+        return raw
+    out = np.empty_like(raw)
+    offset = 0.0
+    out[0] = raw[0]
+    for index in range(1, len(raw)):
+        if raw[index] < raw[index - 1]:
+            if raw[index - 1] - raw[index] < 2**31:
+                raise ValueError(f"{label} moved backward without a uint32 wrap")
+            offset += 2**32
+        out[index] = raw[index] + offset
+    if np.any(np.diff(out) <= 0):
+        raise ValueError(f"{label} does not advance strictly")
+    return out
+
+
+def _device_timing(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, float, int]:
+    """Return device elapsed seconds, unwrapped indexes, rate, and missing count."""
+    device_us = _unwrap_uint32(frame["device_time_us"].to_numpy(), "device_time_us")
+    sample_index = _unwrap_uint32(frame["sample_index"].to_numpy(), "sample_index")
+    elapsed = (device_us - device_us[0]) * 1e-6
+    dt = np.diff(elapsed)
+    if len(dt) == 0 or np.any(dt <= 0):
+        raise ValueError("device timing has fewer than two advancing samples")
+    sfreq = 1.0 / float(np.median(dt))
+    index_steps = np.diff(sample_index)
+    missing = int(np.maximum(index_steps - 1.0, 0.0).sum())
+    return elapsed, sample_index, sfreq, missing
 
 
 def _serial_gaps(time_monotonic: np.ndarray,
@@ -203,7 +246,9 @@ def calibrate_sfreq(frame: pd.DataFrame,
                     gap_threshold_seconds: float = 0.05) -> float:
     """Nominal sample rate of a free-running Arduino recording.
 
-    Uses the span-based rate ``(n - 1) / (active_span)`` where ``active_span``
+    Device-timestamped recordings use the median Arduino interval and are not
+    affected by USB buffering or host process scheduling. Legacy recordings
+    use the span-based rate ``(n - 1) / active_span`` where ``active_span``
     is the wall time the Arduino was actually sampling. The OS serial driver
     buffers bytes, so the PC read loop drains them in bursts and per-byte
     timestamps under-report intra-burst spacing; the total span is otherwise
@@ -212,6 +257,9 @@ def calibrate_sfreq(frame: pd.DataFrame,
     excluded -- otherwise the rate is biased low and every measured frequency
     scales down with it.
     """
+    if _has_device_timing(frame):
+        return _device_timing(frame)[2]
+
     time_monotonic = frame["time_monotonic"].to_numpy()
     if len(time_monotonic) < 2:
         raise ValueError("light_amp.csv has fewer than two samples")
@@ -225,15 +273,18 @@ def calibrate_sfreq(frame: pd.DataFrame,
     return (len(time_monotonic) - 1) / active_span
 
 
-def sampling_diagnostics(frame: pd.DataFrame,
-                         gap_threshold_seconds: float = 0.05) -> dict[str, float | bool]:
+def sampling_diagnostics(
+    frame: pd.DataFrame,
+    gap_threshold_seconds: float = 0.05,
+) -> dict[str, float | bool | int | str]:
     """Report raw-vs-uniform rate estimates to detect bursty serial reads."""
     time_monotonic = frame["time_monotonic"].to_numpy()
     n = len(time_monotonic)
     if n < 2:
         return {"n": n, "span_seconds": 0.0, "median_rate_hz": 0.0,
                 "span_rate_hz": 0.0, "gap_count": 0, "gap_seconds": 0.0,
-                "bursty": False}
+                "bursty": False, "timing_source": "host",
+                "device_rate_hz": 0.0, "missing_device_samples": 0}
     dt = np.diff(time_monotonic)
     span = time_monotonic[-1] - time_monotonic[0]
     _, n_gaps, gap_seconds = _serial_gaps(time_monotonic, gap_threshold_seconds)
@@ -242,7 +293,7 @@ def sampling_diagnostics(frame: pd.DataFrame,
     active_span = max(span - gap_seconds, 1e-9)
     active_rate = (n - 1) / active_span
     ratio = median_rate / span_rate if span_rate > 0 else 1.0
-    return {
+    result: dict[str, float | bool | int | str] = {
         "n": n,
         "span_seconds": float(span),
         "median_rate_hz": float(median_rate),
@@ -251,7 +302,18 @@ def sampling_diagnostics(frame: pd.DataFrame,
         "gap_count": int(n_gaps),
         "gap_seconds": float(gap_seconds),
         "bursty": bool(ratio > 1.5),
+        "timing_source": "host",
+        "device_rate_hz": 0.0,
+        "missing_device_samples": 0,
     }
+    if _has_device_timing(frame):
+        _, _, device_rate, missing = _device_timing(frame)
+        result.update({
+            "timing_source": "device",
+            "device_rate_hz": float(device_rate),
+            "missing_device_samples": missing,
+        })
+    return result
 
 
 def retime_uniform(frame: pd.DataFrame) -> tuple[float, pd.DataFrame]:
@@ -272,6 +334,32 @@ def retime_uniform(frame: pd.DataFrame) -> tuple[float, pd.DataFrame]:
         raise ValueError("light_amp.csv has fewer than two samples")
     if time_monotonic[-1] <= time_monotonic[0]:
         raise ValueError("light_amp.csv timestamps do not advance")
+    if _has_device_timing(frame):
+        elapsed, _, sfreq, _ = _device_timing(frame)
+        uniform_elapsed = np.arange(
+            int(np.floor(elapsed[-1] * sfreq)) + 1,
+            dtype=float,
+        ) / sfreq
+        light_amp = np.interp(
+            uniform_elapsed,
+            elapsed,
+            frame["light_amp"].to_numpy(),
+        )
+        # Receipt time minus device elapsed consists of a fixed clock offset
+        # plus non-negative serial/USB queueing delay. A low percentile selects
+        # the least-backlogged observations without trusting one outlier.
+        clock_offset = float(np.quantile(time_monotonic - elapsed, 0.01))
+        mapped_monotonic = clock_offset + uniform_elapsed
+        wall_minus_monotonic = frame["time_wall"].to_numpy() - time_monotonic
+        wall_offset = float(np.median(wall_minus_monotonic))
+        return sfreq, pd.DataFrame({
+            "time_monotonic": mapped_monotonic,
+            "time_wall": mapped_monotonic + wall_offset,
+            "light_amp": light_amp,
+            "sample_index": np.arange(len(uniform_elapsed)),
+            "device_time_us": uniform_elapsed * 1e6,
+        })
+
     sfreq = calibrate_sfreq(frame)
     out = frame.copy()
     index = np.arange(n)

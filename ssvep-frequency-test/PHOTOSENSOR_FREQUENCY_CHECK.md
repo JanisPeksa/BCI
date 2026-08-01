@@ -5,9 +5,10 @@ analysis utility for sessions produced by either `ssvep-bci` or
 `psychopy-ssvep`. Neither presentation application starts or controls the
 recorder.
 
-The recorder and presentation application must run on the same computer. They
-both use the machine-wide monotonic clock, allowing the analyzer to align light
-samples with frame-confirmed stimulus onset and offset events.
+The recorder and presentation application must run on the same computer. Host
+monotonic time aligns the two processes, while the Arduino's own microsecond
+clock determines sample spacing and measured frequency. USB buffering or host
+CPU load therefore cannot rescale the FFT frequency axis.
 
 All examples below start in the repository's `BCI` directory. Windows examples
 use PowerShell paths; Linux examples use Bash paths. Activate the environment
@@ -40,18 +41,22 @@ be used; no environment directory name is assumed.
 
 Upload
 `ssvep-frequency-test/arduino_light_sensor_sketch/arduino_light_sensor_sketch.ino`
-to the Arduino. It samples A0 and emits newline-delimited 10-bit values at
-19200 baud.
+to the Arduino. It samples A0 at a fixed 400 Hz cadence and emits
+`sample_index,device_time_us,light_amp` records at 115200 baud. The sample index
+detects lost records; the device timestamp remains authoritative even when the
+host receives serial data in bursts.
 
 ## Validation profiles
 
-Both presentation applications include two bundled profiles.
+Monitor-test profiles are grouped under each application's
+`resources/configs/frequency-validation/` folder. Every profile uses one
+400 x 400 px square flush with the bottom-right corner unless its name says it
+adds distractors. Keep the photosensor fixed on that square.
 
 ### `frequency-validation`
 
-This baseline profile displays one 400×400 px square flush with the
-bottom-right corner. It tests 8.25, 9.75, 12.75, and 14.25 Hz for ten seconds
-each. Keep the photosensor fixed on that square for the whole run.
+This alias selects `frequency-validation/12-75`. It presents 12.75 Hz twice,
+for ten seconds per trial, to check that the measurement remains consistent.
 
 Run the baseline profile directly with `ssvep-bci`:
 
@@ -81,12 +86,67 @@ python -m psychopy_ssvep run --config frequency-validation --participant MONITOR
 python3 -m psychopy_ssvep run --config frequency-validation --participant MONITOR_TEST
 ```
 
+### `frequency-validation/8-15-square`
+
+This profile presents 8, 9, 10, 11, 12, 13, 14, and 15 Hz in order, then
+repeats the complete sequence. Each frequency therefore has two independent
+ten-second measurements in one session. During every trial, the measured
+bottom-right square is rendered alongside three upper-screen distractors at
+8.25, 11.25, and 14.25 Hz, so every target is checked under rendering load.
+
+Run the square-wave sweep with `ssvep-bci`:
+
+#### Windows
+
+```powershell
+python -m ssvep_bci run --config frequency-validation/8-15-square --participant MONITOR_TEST
+```
+
+#### Linux
+
+```bash
+python3 -m ssvep_bci run --config frequency-validation/8-15-square --participant MONITOR_TEST
+```
+
+Run the square-wave sweep with PsychoPy:
+
+#### Windows
+
+```powershell
+python -m psychopy_ssvep run --config frequency-validation/8-15-square --participant MONITOR_TEST
+```
+
+#### Linux
+
+```bash
+python3 -m psychopy_ssvep run --config frequency-validation/8-15-square --participant MONITOR_TEST
+```
+
+### `frequency-validation/8-15-sinusoidal` (PsychoPy only)
+
+This uses the same target and distractor frequencies, order, duration, and two
+repetitions as the square-wave sweep, but modulates every rectangle's
+brightness sinusoidally.
+
+#### Windows
+
+```powershell
+python -m psychopy_ssvep run --config frequency-validation/8-15-sinusoidal --participant MONITOR_TEST
+```
+
+#### Linux
+
+```bash
+python3 -m psychopy_ssvep run --config frequency-validation/8-15-sinusoidal --participant MONITOR_TEST
+```
+
 ### `frequency-validation-with-distractors`
 
 This rendering-load profile keeps the measured 400×400 px square in the same
 bottom-right location at 12.75 Hz. Three other 400×400 px rectangles flicker
 simultaneously across the upper part of the display at 8.25, 9.75, and
-14.25 Hz. The profile repeats four ten-second trials.
+14.25 Hz. The profile repeats two ten-second trials. The legacy bundled name
+remains an alias for `frequency-validation/with-distractors`.
 
 The photosensor must remain on the bottom-right square. Comparing its detected
 frequency and timing with the baseline profile's 12.75 Hz trial shows whether
@@ -120,7 +180,7 @@ python -m psychopy_ssvep run --config frequency-validation-with-distractors --pa
 python3 -m psychopy_ssvep run --config frequency-validation-with-distractors --participant MONITOR_TEST
 ```
 
-Before using either PsychoPy profile, set `refresh_rate_hz`, `monitor_name`,
+Before using a PsychoPy profile, set `refresh_rate_hz`, `monitor_name`,
 and gamma for the display being tested. The bundled defaults target a 60 Hz
 monitor with gamma 1.0.
 
@@ -143,7 +203,9 @@ record-photosensor --port /dev/ttyACM0 --out './measurements/monitor-test'
 
 Linux Arduino ports are commonly `/dev/ttyACM0` or `/dev/ttyUSB0`. The recorder
 writes `light_amp.csv` and `photosensor_sync.csv` into the selected measurement
-directory.
+directory. `light_amp.csv` contains host receipt times, light amplitude, device
+sample index, and device microsecond time. The default baud is 115200; only use
+`--baud` when the sketch has been changed to match.
 
 ## Portable two-terminal workflow
 

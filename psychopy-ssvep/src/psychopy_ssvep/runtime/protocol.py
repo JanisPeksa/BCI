@@ -241,8 +241,13 @@ class ProtocolRuntime:
                     ),
                 )
             else:
-                scene_ids = self.config.protocol.simultaneous_stimulus_ids or (
-                    target.id,
+                additional_ids = (
+                    self.config.protocol.simultaneous_stimulus_ids or ()
+                )
+                scene_ids = (target.id,) + tuple(
+                    stimulus_id
+                    for stimulus_id in additional_ids
+                    if stimulus_id != target.id
                 )
                 scene_nodes = tuple(
                     StimulusNode(

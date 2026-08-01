@@ -174,17 +174,24 @@ the UI or creating a session:
 ssvep-bci validate
 ```
 
-For a short photosensor-based monitor check, use the bundled
-`frequency-validation.yaml` profile. It shows one 400 x 400 px square flush
-with the bottom-right corner at four frequencies for ten seconds each and
-records frame-confirmed event boundaries:
+Monitor-test profiles are grouped under `resources/configs/frequency-validation/`.
+The `frequency-validation` alias shows one 400 x 400 px bottom-right square at
+12.75 Hz for two ten-second trials:
 
 ```powershell
 ssvep-bci run --config frequency-validation --participant MONITOR_TEST
 ```
 
+To physically verify every integer frequency from 8 through 15 Hz twice while
+three additional rectangles flicker at different frequencies, run:
+
+```powershell
+ssvep-bci run --config frequency-validation/8-15-square --participant MONITOR_TEST
+```
+
 To check whether additional rendering load affects the measured square, use
-`frequency-validation-with-distractors`. The 12.75 Hz photosensor target stays
+`frequency-validation-with-distractors` (an alias for
+`frequency-validation/with-distractors`). The 12.75 Hz photosensor target stays
 in the bottom-right while three other rectangles flicker simultaneously:
 
 ```powershell

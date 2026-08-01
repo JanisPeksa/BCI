@@ -19,12 +19,13 @@ def test_default_configuration_and_plan_are_deterministic() -> None:
 
 def test_frequency_validation_profile_uses_bottom_right_400px_square() -> None:
     resolved = load_experiment(
-        "src/ssvep_bci/resources/configs/frequency-validation.yaml"
+        "src/ssvep_bci/resources/configs/frequency-validation/12-75.yaml"
     )
     plan = compile_session_plan(resolved.config)
 
-    assert plan.trial_count == 4
-    assert plan.duration_seconds == 54.0
+    assert plan.trial_count == 2
+    assert plan.duration_seconds == 28.0
+    assert [stimulus.frequency_hz for stimulus in resolved.config.stimuli] == [12.75]
     for stimulus in resolved.config.stimuli:
         assert stimulus.visual.resolve_rect(1920, 1080) == (1520, 680, 400, 400)
 
@@ -33,7 +34,42 @@ def test_frequency_validation_profile_can_be_loaded_by_name() -> None:
     resolved = load_experiment("frequency-validation")
 
     assert resolved.config.experiment_id == "frequency-validation"
-    assert resolved.config_path.name == "frequency-validation.yaml"
+    assert resolved.config_path.name == "12-75.yaml"
+
+
+def test_frequency_validation_sweep_checks_8_through_15_hz_twice() -> None:
+    resolved = load_experiment("frequency-validation/8-15-square")
+    plan = compile_session_plan(resolved.config)
+
+    expected = [float(value) for value in range(8, 16)]
+    stimuli = {stimulus.id: stimulus for stimulus in resolved.config.stimuli}
+    targets = [stimuli[f"freq-{value}"] for value in range(8, 16)]
+    assert [stimulus.frequency_hz for stimulus in targets] == expected
+    assert [
+        next(
+            stimulus.frequency_hz
+            for stimulus in targets
+            if stimulus.id == stimulus_id
+        )
+        for stimulus_id in resolved.config.ordered_stimulus_ids
+    ] == expected * 2
+    assert plan.trial_count == 16
+    assert plan.duration_seconds == 210.0
+    assert all(
+        stimulus.visual.resolve_rect(1920, 1080) == (1520, 680, 400, 400)
+        for stimulus in targets
+    )
+    distractor_ids = {
+        "distractor-8-25",
+        "distractor-11-25",
+        "distractor-14-25",
+    }
+    assert set(resolved.config.protocol.simultaneous_stimulus_ids or ()) == distractor_ids
+    assert {stimuli[stimulus_id].frequency_hz for stimulus_id in distractor_ids} == {
+        8.25,
+        11.25,
+        14.25,
+    }
 
 
 def test_distractor_validation_keeps_measured_square_isolated() -> None:
@@ -43,8 +79,8 @@ def test_distractor_validation_keeps_measured_square_isolated() -> None:
     target = stimuli["measured-12-75"]
     target_rect = target.visual.resolve_rect(1920, 1080)
 
-    assert plan.trial_count == 4
-    assert plan.duration_seconds == 54.0
+    assert plan.trial_count == 2
+    assert plan.duration_seconds == 28.0
     assert target.frequency_hz == 12.75
     assert target_rect == (1520, 680, 400, 400)
     assert set(resolved.config.protocol.simultaneous_stimulus_ids or ()) == set(stimuli)

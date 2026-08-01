@@ -52,16 +52,25 @@ Run a windowed synthetic dry run (no hardware needed):
 psychopy-ssvep run --participant TEST001 --windowed
 ```
 
-For photosensor-based screen validation, use the bundled profile that presents
-one 400 x 400 px square flush with the bottom-right corner at four frequencies
-for ten seconds each:
+Monitor-test profiles are grouped under `resources/configs/frequency-validation/`.
+The `frequency-validation` alias shows one 400 x 400 px bottom-right square at
+12.75 Hz for two ten-second trials:
 
 ```bash
 psychopy-ssvep run --config frequency-validation --participant MONITOR_TEST
 ```
 
+The 8-15 Hz square and sinusoidal profiles test every integer frequency twice
+while three additional rectangles flicker at different frequencies:
+
+```bash
+psychopy-ssvep run --config frequency-validation/8-15-square --participant MONITOR_TEST
+psychopy-ssvep run --config frequency-validation/8-15-sinusoidal --participant MONITOR_TEST
+```
+
 To check whether additional rendering load affects the measured square, use
-`frequency-validation-with-distractors`. The 12.75 Hz photosensor target stays
+`frequency-validation-with-distractors` (an alias for
+`frequency-validation/with-distractors`). The 12.75 Hz photosensor target stays
 in the bottom-right while three other rectangles flicker simultaneously:
 
 ```bash

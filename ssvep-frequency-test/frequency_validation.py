@@ -70,7 +70,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_workspace(record)
     record.add_argument("--port", required=True)
-    record.add_argument("--baud", type=int, default=19200)
+    record.add_argument("--baud", type=int, default=115200)
     record.add_argument("--measurement-root")
     record.add_argument("--name", help="measurement folder name")
     record.add_argument("--warmup", type=int, default=100)

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Independent free-running photoresistor recorder for SSVEP frequency checks.
 
-Reads one newline-terminated ASCII sample (the raw 10-bit ``analogRead``,
-0-1023) per loop iteration from an Arduino running
-`arduino_light_sensor_sketch` and timestamps every line on the PC with
-`time.perf_counter()` -- the exact clock the ssvep-bci app uses for its
-`events.jsonl` monotonic timestamps written by ssvep-bci and psychopy-ssvep --
-plus wall-clock UTC for cross-validation.
+Reads newline-terminated ``sample_index,device_time_us,light_amp`` records from
+an Arduino running `arduino_light_sensor_sketch`. Device time provides the
+frequency clock; host monotonic and wall-clock receipt times align the device
+stream to sessions produced by ssvep-bci and psychopy-ssvep. Legacy sketches
+that emit only one light value per line remain supported.
 
 The recorder is standalone: start it before either experiment app, stop it
 after the session ends, then run the analysis against the session folder.
@@ -36,7 +35,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--port", required=True,
                         help="serial port, e.g. /dev/ttyACM0 (Uno) or /dev/ttyUSB0 (FTDI)")
-    parser.add_argument("--baud", type=int, default=19200,
+    parser.add_argument("--baud", type=int, default=115200,
                         help="must match the Arduino sketch")
     parser.add_argument("--out", default=".",
                         help="directory for light_amp.csv and photosensor_sync.csv")
@@ -49,9 +48,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _append_sync(path: Path, kind: str, t_mono: float, t_wall: float) -> None:
+def _append_sync(
+    path: Path,
+    kind: str,
+    t_mono: float,
+    t_wall: float,
+    sample_index: int | None = None,
+    device_time_us: int | None = None,
+) -> None:
     with path.open("a", newline="", encoding="utf-8") as handle:
-        csv.writer(handle).writerow([kind, f"{t_mono:.12f}", f"{t_wall:.12f}"])
+        csv.writer(handle).writerow([
+            kind,
+            f"{t_mono:.12f}",
+            f"{t_wall:.12f}",
+            "" if sample_index is None else sample_index,
+            "" if device_time_us is None else device_time_us,
+        ])
+
+
+def parse_serial_sample(raw: bytes) -> tuple[int | None, int | None, int] | None:
+    """Parse the device-timed protocol or the legacy one-value protocol."""
+    try:
+        fields = raw.decode("ascii").strip().split(",")
+    except UnicodeDecodeError:
+        return None
+    try:
+        if len(fields) == 3:
+            sample_index, device_time_us, light_amp = (int(value) for value in fields)
+            if sample_index < 0 or device_time_us < 0:
+                return None
+            return sample_index, device_time_us, light_amp
+        if len(fields) == 1:
+            return None, None, int(fields[0])
+    except ValueError:
+        return None
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,9 +93,21 @@ def main(argv: list[str] | None = None) -> int:
     sync_path = out / "photosensor_sync.csv"
 
     with light_path.open("w", newline="", encoding="utf-8") as handle:
-        csv.writer(handle).writerow(["time_monotonic", "time_wall", "light_amp"])
+        csv.writer(handle).writerow([
+            "time_monotonic",
+            "time_wall",
+            "light_amp",
+            "sample_index",
+            "device_time_us",
+        ])
     with sync_path.open("w", newline="", encoding="utf-8") as handle:
-        csv.writer(handle).writerow(["kind", "time_monotonic", "time_wall"])
+        csv.writer(handle).writerow([
+            "kind",
+            "time_monotonic",
+            "time_wall",
+            "sample_index",
+            "device_time_us",
+        ])
 
     arduino = serial.Serial(args.port, args.baud, timeout=0.05)
     arduino.reset_input_buffer()  # drop any stale bytes from the port
@@ -73,10 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     print("Note: opening the port resets the Arduino (~2 s); wait for data to flow.")
     print("Press Ctrl-C to stop.")
 
-    buffer: list[tuple[float, float, int]] = []
+    buffer: list[tuple[float, float, int, int | str, int | str]] = []
     pending = b""                 # partial line accumulator (newline framing)
     call = 0
     recorded = 0
+    invalid = 0
+    device_timed = 0
+    missing_samples = 0
+    previous_index: int | None = None
     start = time.perf_counter()
     try:
         while True:
@@ -91,10 +138,11 @@ def main(argv: list[str] | None = None) -> int:
                 raw = line.strip()
                 if not raw:
                     continue
-                try:
-                    value = int(raw)
-                except ValueError:
+                parsed = parse_serial_sample(raw)
+                if parsed is None:
+                    invalid += 1
                     continue
+                sample_index, device_time_us, value = parsed
                 t_mono = time.perf_counter()
                 t_wall = time.time()
                 if call < args.warmup:          # discard serial warm-up samples
@@ -102,8 +150,26 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 if call == args.warmup:         # one diagnostic sync line
                     call += 1
-                    _append_sync(sync_path, "warmup_end", t_mono, t_wall)
-                buffer.append((t_mono, t_wall, value))
+                    _append_sync(
+                        sync_path,
+                        "warmup_end",
+                        t_mono,
+                        t_wall,
+                        sample_index,
+                        device_time_us,
+                    )
+                if sample_index is not None:
+                    device_timed += 1
+                    if previous_index is not None and sample_index > previous_index + 1:
+                        missing_samples += sample_index - previous_index - 1
+                    previous_index = sample_index
+                buffer.append((
+                    t_mono,
+                    t_wall,
+                    value,
+                    "" if sample_index is None else sample_index,
+                    "" if device_time_us is None else device_time_us,
+                ))
                 recorded += 1
                 call += 1
                 if len(buffer) >= args.batch:
@@ -129,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"wrote {recorded} samples to {light_path} "
               f"({recorded / elapsed:.0f} Hz including reset+warm-up)")
+        protocol = "device-timed" if device_timed == recorded else "legacy host-timed"
+        print(f"protocol: {protocol}; ignored non-sample lines: {invalid}; "
+              f"missing device samples: {missing_samples}")
     return 0
 
 

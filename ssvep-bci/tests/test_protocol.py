@@ -80,6 +80,31 @@ def test_collection_cues_one_target_then_flashes_four_target_scene() -> None:
     assert not any(node.highlighted for node in stimulus.scene.nodes)
 
 
+def test_frequency_sweep_combines_selected_target_with_fixed_distractors() -> None:
+    resolved = load_experiment("frequency-validation/8-15-square")
+    clock = VirtualClock()
+    runtime = ProtocolRuntime(
+        "session",
+        compile_session_plan(resolved.config),
+        resolved.config,
+        clock,
+        MemoryEventSink(),
+    )
+    runtime.start()
+    clock.advance(3.0)
+    runtime.tick()
+
+    cue = runtime.view_state()
+    assert cue.scene is not None
+    assert [node.stimulus.id for node in cue.scene.nodes] == [
+        "freq-8",
+        "distractor-8-25",
+        "distractor-11-25",
+        "distractor-14-25",
+    ]
+    assert [node.highlighted for node in cue.scene.nodes] == [True, False, False, False]
+
+
 def test_progress_is_shown_only_during_post_trial_rest() -> None:
     resolved = load_experiment()
     clock = VirtualClock()
