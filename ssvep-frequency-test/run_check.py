@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Headless photosensor frequency check for an ssvep-bci session.
+"""Headless photosensor frequency check for an ssvep-bci or PsychoPy session.
 
-Combines a recorded session folder (events.jsonl + experiment-config.yaml) with
-the light data captured by record_photosensor.py and writes:
+Combines trial timing (an ssvep-bci session folder's events.jsonl, or a
+PsychoPy trial-log CSV) with the light data captured by record_photosensor.py
+and writes:
 
     summary.csv            per-trial target/detected frequency table
     time_domain.png        per-trial waveform strips (frame-skip inspection)
@@ -10,6 +11,7 @@ the light data captured by record_photosensor.py and writes:
 
 Usage:
     python run_check.py --session <session_dir> --light <light_amp.csv>
+    python run_check.py --psychopy-trials <trial_times.csv> --light <light_amp.csv>
         [--latency 0.07] [--out <report_dir>]
 """
 
@@ -32,6 +34,7 @@ from photosensor_check.analysis import (  # noqa: E402
     detect_peak,
     load_events,
     load_light_amp,
+    load_psychopy_trials,
     load_stimuli,
     power_spectrum,
     retime_uniform,
@@ -48,7 +51,11 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--session", required=True, help="path to an ssvep-bci session folder")
+    parser.add_argument("--session", default=None,
+                        help="path to an ssvep-bci session folder (events.jsonl + experiment-config.yaml)")
+    parser.add_argument("--psychopy-trials", default=None,
+                        help="PsychoPy trial-log CSV with onset/offset rows "
+                             "(kind, time_monotonic, time_wall, trial_number, ...)")
     parser.add_argument("--light", required=True, help="path to light_amp.csv from record_photosensor.py")
     parser.add_argument("--latency", type=float, default=0.07,
                         help="serial-latency fudge added to every trial window (s)")
@@ -123,19 +130,29 @@ def _plot_fft_classes(segments, sfreq: float) -> plt.Figure:
 
 def main() -> int:
     args = parse_args()
-    session = Path(args.session)
-    if not (session / "events.jsonl").is_file():
-        sys.exit(f"error: {session} is not a session folder (no events.jsonl)")
+    if not args.session and not args.psychopy_trials:
+        sys.exit("error: provide --session or --psychopy-trials")
     if not Path(args.light).is_file():
         sys.exit(f"error: light data not found: {args.light}")
+
+    if args.psychopy_trials:
+        trials = load_psychopy_trials(args.psychopy_trials)
+        if not trials:
+            sys.exit(f"error: no onset rows found in {args.psychopy_trials}")
+        duration = 5.0
+    else:
+        session = Path(args.session)
+        if not (session / "events.jsonl").is_file():
+            sys.exit(f"error: {session} is not a session folder (no events.jsonl)")
+        events = load_events(session)
+        stimuli = load_stimuli(session)
+        config = yaml.safe_load((session / "experiment-config.yaml").read_text(encoding="utf-8"))
+        duration = float((config.get("protocol") or {}).get("stimulation_seconds", 5.0))
+        trials = build_trials(events, stimuli, default_duration_seconds=duration)
+
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    events = load_events(session)
-    stimuli = load_stimuli(session)
-    config = yaml.safe_load((session / "experiment-config.yaml").read_text(encoding="utf-8"))
-    duration = float((config.get("protocol") or {}).get("stimulation_seconds", 5.0))
-    trials = build_trials(events, stimuli, default_duration_seconds=duration)
     frame = load_light_amp(args.light)
 
     diagnostics = sampling_diagnostics(frame)
@@ -171,9 +188,11 @@ def main() -> int:
           f"(empty windows: {empty})")
     print(f"median |delta| = {summary['delta_hz'].dropna().abs().median():.4f} Hz")
     if "amp_delta" in summary:
+        def _fmt(value: float) -> str:
+            return "-" if not np.isfinite(value) else f"{value:.0f}"
         print("per-trial light deltas (amp_p05 -> amp_p95): "
-              f"{summary['amp_p05'].round(0).astype(int).tolist()} -> "
-              f"{summary['amp_p95'].round(0).astype(int).tolist()}")
+              f"[{', '.join(_fmt(v) for v in summary['amp_p05'])}] -> "
+              f"[{', '.join(_fmt(v) for v in summary['amp_p95'])}]")
     passed = int(summary["pass"].sum())
     failed = int((~summary["pass"]).sum())
     print(f"PASS {passed} / FAIL {failed}")

@@ -265,9 +265,11 @@ class ProtocolRuntime:
             StepKind.INITIAL_REST: "Prepare",
             StepKind.PRE_STIMULUS: "Focus on the stimulus location",
             StepKind.STIMULUS: "",
-            StepKind.INTER_TRIAL: "Rest",
             StepKind.FINAL_REST: "Complete",
         }
+        message = messages.get(step.kind, self.state.value) if step else self.state.value
+        if step is not None and step.kind == StepKind.INTER_TRIAL:
+            message = self._trial_progress_message()
         return ViewState(
             run_state=self.state.value,
             phase=phase,
@@ -278,9 +280,26 @@ class ProtocolRuntime:
             presentation_id=step.presentation_id if step else None,
             scene=scene,
             remaining_seconds=self.remaining_seconds,
-            message=messages.get(step.kind, self.state.value) if step else self.state.value,
+            message=message,
             error=self.error,
         )
+
+    def _trial_progress_message(self) -> str:
+        presentation = self.config.presentation
+        if not presentation.show_trial_progress:
+            return "Rest"
+        completed = self._completed_trial_count
+        total = self.plan.trial_count
+        next_trial = min(completed + 1, total)
+        try:
+            return presentation.trial_progress_message.format(
+                completed=completed,
+                current=next_trial,
+                next=next_trial,
+                total=total,
+            )
+        except (KeyError, IndexError, ValueError):
+            return presentation.trial_progress_message
 
     def _enter_current(self, anchor: float) -> None:
         while self._cursor < len(self.plan.steps):

@@ -109,6 +109,8 @@ presentation:
   window_size_px: [1000, 700]  # used in windowed mode
   background_color: "#000000"
   hide_cursor: true
+  show_trial_progress: true
+  trial_progress_message: "Trial {current} of {total}"
   refresh_preflight_frames: 120
   require_timing_quality: true
   max_frequency_error_hz: 0.25
@@ -129,6 +131,10 @@ presentation:
     cue_border_width_px: 8
 ```
 
+`show_trial_progress: true` shows the `trial_progress_message` template during
+each inter-trial rest. Supported placeholders: `{current}` (the next trial
+number), `{total}`, `{completed}`, and `{next}` (alias of `{current}`).
+
 `refresh_rate_hz` should match the actual monitor refresh rate. Set
 `require_timing_quality: true` to fail the session if the measured rate deviates
 by more than `max_frequency_error_hz` or drops more than
@@ -141,6 +147,10 @@ The full `ssvep-bci` layout machinery is retained:
 
 - `protocol.simultaneous_stimulus_ids`: several stimuli flash at once, each at
   its own frequency, while `stimulus_sequence` cycles the attended target.
+  Combine with `randomize_stimulus_sequence: true` and `repetitions` so each
+  frequency is attended an equal number of times in a seeded random order.
+  `six-frequency-six-square-4sec-4min.yaml` uses this to attend each of six
+  frequencies exactly 8 times (48 trials).
 - `dual_stimulus` / `multi_stimulus`: side-by-side or grid target/distractor
   layouts. By default these cycle the target through every position/side
   (`randomize_conditions: false` only disables *shuffling* — the target still

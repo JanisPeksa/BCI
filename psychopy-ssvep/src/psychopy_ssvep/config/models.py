@@ -255,6 +255,8 @@ class PresentationConfig(StrictModel):
     window_size_px: tuple[int, int] | None = None
     background_color: str = Field(default="#808080", pattern=COLOR_PATTERN)
     hide_cursor: bool = True
+    show_trial_progress: bool = True
+    trial_progress_message: str = "Trial {current} of {total}"
     refresh_preflight_frames: int = Field(default=120, ge=30)
     require_timing_quality: bool = True
     max_frequency_error_hz: float = Field(default=0.25, gt=0)

@@ -107,6 +107,59 @@ def build_trials(
     return trials
 
 
+def load_psychopy_trials(path: str | Path) -> list[Trial]:
+    """Build Trial objects from a PsychoPy trial-log CSV.
+
+    The CSV has one ``kind`` column with ``onset``/``offset`` values. Onset rows
+    carry the stimulus metadata. Each onset is paired with the earliest unused
+    offset that occurs after it (temporal pairing, robust to duplicated
+    ``trial_number`` values). Times are ``time.perf_counter()``
+    (``time_monotonic``) plus wall-UTC epoch (``time_wall``) -- the same clock
+    domain as the photosensor recorder and ssvep-bci events.jsonl, so the rest
+    of the pipeline (segmentation, FFT, frame-skip, alignment) works unchanged.
+    """
+    df = pd.read_csv(path, skipinitialspace=True)
+    for col in ["time_monotonic", "time_wall", "frequency_hz",
+                "phase_offset_radians", "duty_cycle"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "trial_number" not in df.columns:
+        df["trial_number"] = 1
+    df["trial_number"] = df["trial_number"].astype(int)
+
+    offsets = (df[df["kind"] == "offset"]
+               .sort_values("time_monotonic")
+               .reset_index(drop=True))
+    offset_index = 0
+    trials: list[Trial] = []
+    onsets = df[df["kind"] == "onset"].sort_values("time_monotonic")
+    for _, onset in onsets.iterrows():
+        trial_number = int(onset["trial_number"])
+        offset = None
+        while offset_index < len(offsets):
+            candidate = offsets.iloc[offset_index]
+            if candidate["time_monotonic"] > onset["time_monotonic"]:
+                offset = candidate
+                break
+            offset_index += 1
+        if offset is not None:
+            offset_index += 1
+        trials.append(Trial(
+            presentation_id=f"trial-{trial_number}",
+            trial_number=trial_number,
+            stimulus_id=str(onset.get("stimulus_id", "stimulus")),
+            frequency_hz=float(onset["frequency_hz"]),
+            phase_offset_radians=float(onset.get("phase_offset_radians", 0.0)),
+            duty_cycle=float(onset.get("duty_cycle", 0.5)),
+            onset_monotonic=float(onset["time_monotonic"]),
+            onset_wall=float(onset["time_wall"]),
+            offset_monotonic=float(offset["time_monotonic"]) if offset is not None else None,
+            offset_wall=float(offset["time_wall"]) if offset is not None else None,
+        ))
+    trials.sort(key=lambda trial: trial.onset_monotonic)
+    return trials
+
+
 def load_light_amp(path: str | Path) -> pd.DataFrame:
     """Load light_amp.csv (time_monotonic, time_wall, light_amp)."""
     frame = pd.read_csv(path, skipinitialspace=True)
