@@ -101,6 +101,36 @@ def test_collection_profile_is_balanced_and_exact() -> None:
         assert set(targets[offset:offset + 4]) == set(stimuli)
 
 
+def test_two_second_profile_matches_short_training_window() -> None:
+    resolved = load_experiment("four-frequency-fbtdca-2s")
+
+    assert resolved.config.processing.window.onset_offset_seconds == 0.25
+    assert resolved.config.processing.window.length_seconds == 2.0
+    assert resolved.config.protocol.stimulation_seconds == 4.0
+    assert tuple(resolved.config.processing.candidate_frequencies_hz) == (
+        8.0,
+        9.0,
+        13.0,
+        14.0,
+    )
+
+    uncut = load_experiment("four-frequency-fbtdca-2s-uncut")
+    assert uncut.config.processing.window.onset_offset_seconds == 0.0
+    assert uncut.config.processing.window.length_seconds == 2.0
+    assert uncut.config.protocol.stimulation_seconds == 4.0
+
+
+def test_one_and_a_half_second_profile_uses_final_one_and_a_quarter_seconds() -> None:
+    resolved = load_experiment("four-frequency-fbtdca-1p5s-stimulus")
+    plan = compile_session_plan(resolved.config)
+
+    assert resolved.config.protocol.stimulation_seconds == 1.5
+    assert resolved.config.processing.window.onset_offset_seconds == 0.25
+    assert resolved.config.processing.window.length_seconds == 1.25
+    assert plan.trial_count == 48
+    assert plan.duration_seconds == 276
+
+
 def test_verification_override_and_fbtdca_processing(tmp_path) -> None:
     collection = load_experiment("four-frequency-fbtdca")
     artifact = _artifact(tmp_path, collection)
@@ -282,6 +312,24 @@ def test_raw_sessions_are_discovered_and_extracted(tmp_path) -> None:
     assert dataset.labels.tolist() == [0, 1, 2, 3] * 2
     assert dataset.session_groups.tolist() == [0] * 4 + [1] * 4
     assert dataset.excluded_trials == ()
+
+    short_dataset = load_fbtdca_dataset(
+        discovered,
+        "P001",
+        window_onset_offset_seconds=0.0,
+        window_length_seconds=2.0,
+    )
+    assert short_dataset.eeg.shape == (8, 8, 500)
+    assert short_dataset.window_onset_offset_seconds == 0.0
+    assert short_dataset.window_length_seconds == 2.0
+
+    with pytest.raises(FbtdcaTrainingError, match="cannot exceed"):
+        load_fbtdca_dataset(discovered, "P001", window_length_seconds=4.0)
+
+    with pytest.raises(FbtdcaTrainingError, match="non-negative"):
+        load_fbtdca_dataset(
+            discovered, "P001", window_onset_offset_seconds=-0.1
+        )
 
     with pytest.raises(FbtdcaTrainingError, match="zero phase"):
         load_fbtdca_dataset(

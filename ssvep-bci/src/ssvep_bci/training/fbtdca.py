@@ -208,8 +208,30 @@ def _extract_epoch(
 
 
 def load_fbtdca_dataset(
-    session_paths: Iterable[str | Path], participant_id: str
+    session_paths: Iterable[str | Path],
+    participant_id: str,
+    *,
+    window_onset_offset_seconds: float | None = None,
+    window_length_seconds: float | None = None,
 ) -> FbtdcaDataset:
+    requested_onset_offset = (
+        None
+        if window_onset_offset_seconds is None
+        else float(window_onset_offset_seconds)
+    )
+    if requested_onset_offset is not None and (
+        not np.isfinite(requested_onset_offset) or requested_onset_offset < 0
+    ):
+        raise FbtdcaTrainingError(
+            "window onset offset override must be finite and non-negative"
+        )
+    requested_window_length = (
+        None if window_length_seconds is None else float(window_length_seconds)
+    )
+    if requested_window_length is not None and (
+        not np.isfinite(requested_window_length) or requested_window_length <= 0
+    ):
+        raise FbtdcaTrainingError("window length override must be finite and positive")
     paths = tuple(Path(path).expanduser().resolve() for path in session_paths)
     if len(paths) < 2:
         raise FbtdcaTrainingError("leave-one-session-out training requires two sessions")
@@ -239,6 +261,29 @@ def load_fbtdca_dataset(
         processing = experiment["processing"]
         window = processing["window"]
         notch = processing["notch"]
+        configured_onset_offset = float(window["onset_offset_seconds"])
+        configured_window_length = float(window["length_seconds"])
+        effective_onset_offset = (
+            configured_onset_offset
+            if requested_onset_offset is None
+            else requested_onset_offset
+        )
+        effective_window_length = (
+            configured_window_length
+            if requested_window_length is None
+            else requested_window_length
+        )
+        if effective_window_length > configured_window_length + 1e-12:
+            raise FbtdcaTrainingError(
+                "window length override cannot exceed the recorded processing window "
+                f"({configured_window_length:g} seconds)"
+            )
+        stimulation_seconds = float(experiment["protocol"]["stimulation_seconds"])
+        if effective_onset_offset + effective_window_length > stimulation_seconds + 1e-12:
+            raise FbtdcaTrainingError(
+                "requested analysis window exceeds the recorded stimulation interval "
+                f"({stimulation_seconds:g} seconds)"
+            )
         frequencies = tuple(float(value) for value in processing["candidate_frequencies_hz"])
         if len(frequencies) != 4:
             raise FbtdcaTrainingError("FBTDCA dataset requires exactly four frequencies")
@@ -258,8 +303,8 @@ def load_fbtdca_dataset(
             "channel_names": tuple(acquisition["channel_names"]),
             "candidate_frequencies_hz": frequencies,
             "phase_offsets_radians": phases,
-            "window_onset_offset_seconds": float(window["onset_offset_seconds"]),
-            "window_length_seconds": float(window["length_seconds"]),
+            "window_onset_offset_seconds": effective_onset_offset,
+            "window_length_seconds": effective_window_length,
             "notch_enabled": bool(notch["enabled"]),
             "notch_frequency_hz": float(notch["frequency_hz"]),
             "notch_quality_factor": float(notch["quality_factor"]),
