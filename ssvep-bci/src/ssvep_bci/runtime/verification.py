@@ -189,11 +189,16 @@ def format_verification_scorecard(snapshot: VerificationSnapshot) -> str:
             f"Last {snapshot.latest_target_frequency_hz:g}→"
             f"{snapshot.latest_predicted_frequency_hz:g} Hz ({marker})"
         )
-    classes = "  ".join(
+    class_values = [
         f"{frequency:g} Hz {correct}/{total}"
         for frequency, correct, total in snapshot.per_class_counts
-    )
+    ]
+    classes_per_line = 3 if len(class_values) > 4 else len(class_values)
+    class_lines = [
+        "  ".join(class_values[offset:offset + classes_per_line])
+        for offset in range(0, len(class_values), classes_per_line)
+    ]
     return (
         f"Scored {snapshot.scored_trials}  Correct {snapshot.correct_trials}  "
-        f"Accuracy {accuracy}  |  {latest}\n{classes}"
+        f"Accuracy {accuracy}  |  {latest}\n" + "\n".join(class_lines)
     )

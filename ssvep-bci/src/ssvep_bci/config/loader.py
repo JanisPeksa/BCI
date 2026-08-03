@@ -167,8 +167,6 @@ def enable_fbtdca_verification(
         raise ConfigurationError(
             f"configuration cannot be used for FBTDCA verification:\n{exc}"
         ) from exc
-    if len(config.processing.candidate_frequencies_hz) != 4:
-        raise ConfigurationError("FBTDCA verification requires exactly four candidates")
     phases = tuple(stimulus.phase_offset_radians for stimulus in config.stimuli)
     if any(abs(value) > 1e-12 for value in phases):
         raise ConfigurationError("FBTDCA verification requires zero phase offsets")

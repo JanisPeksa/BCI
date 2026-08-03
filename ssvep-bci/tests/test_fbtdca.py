@@ -18,6 +18,7 @@ from ssvep_bci.dsp.processors import FbccaProcessor
 from ssvep_bci.planning import compile_session_plan
 from ssvep_bci.recording import SessionRecorder, validate_session
 from ssvep_bci.runtime.verification import (
+    VerificationSnapshot,
     VerificationTracker,
     format_verification_scorecard,
 )
@@ -34,12 +35,20 @@ from ssvep_bci.ui.subject_window import should_show_verification_scorecard
 
 
 class FakeFbtdcaEstimator:
-    classes_ = np.arange(4)
+    def __init__(
+        self,
+        *,
+        sample_count: int = 875,
+        scores: tuple[float, ...] = (0.1, 0.2, 0.9, 0.3),
+    ) -> None:
+        self.sample_count = sample_count
+        self.scores = scores
+        self.classes_ = np.arange(len(scores))
 
     def transform(self, value):
         assert value.ndim == 3
-        assert value.shape[1:] == (8, 875)
-        return np.asarray([[0.1, 0.2, 0.9, 0.3]])
+        assert value.shape[1:] == (8, self.sample_count)
+        return np.asarray([self.scores])
 
     def predict(self, value):
         return np.argmax(self.transform(value), axis=1)
@@ -56,7 +65,7 @@ def _metadata(resolved, participant_id="P001"):
         "sampling_rate_hz": resolved.device.sampling_rate_hz,
         "channel_names": list(config.channels),
         "candidate_frequencies_hz": list(config.candidate_frequencies_hz),
-        "phase_offsets_radians": [0.0] * 4,
+        "phase_offsets_radians": [0.0] * len(config.candidate_frequencies_hz),
         "label_to_frequency_hz": {
             str(index): frequency
             for index, frequency in enumerate(config.candidate_frequencies_hz)
@@ -69,10 +78,16 @@ def _metadata(resolved, participant_id="P001"):
     }
 
 
-def _artifact(tmp_path: Path, resolved, participant_id="P001") -> Path:
+def _artifact(
+    tmp_path: Path,
+    resolved,
+    participant_id="P001",
+    estimator=None,
+) -> Path:
     path = tmp_path / "fbtdca.joblib"
+    estimator = estimator if estimator is not None else FakeFbtdcaEstimator()
     joblib.dump(
-        {"metadata": _metadata(resolved, participant_id), "estimator": FakeFbtdcaEstimator()},
+        {"metadata": _metadata(resolved, participant_id), "estimator": estimator},
         path,
     )
     return path
@@ -99,6 +114,65 @@ def test_collection_profile_is_balanced_and_exact() -> None:
     assert all(targets.count(stimulus_id) == 12 for stimulus_id in stimuli)
     for offset in range(0, len(targets), 4):
         assert set(targets[offset:offset + 4]) == set(stimuli)
+
+
+def test_six_frequency_profiles_are_balanced_and_model_compatible() -> None:
+    collection = load_experiment("six-frequency-fbtdca")
+    validation = load_experiment("six-frequency-fbtdca-validation")
+    collection_plan = compile_session_plan(collection.config)
+    validation_plan = compile_session_plan(validation.config)
+    expected_frequencies = (8.0, 9.0, 10.0, 13.0, 14.0, 15.0)
+    expected_positions = (
+        (0.2, 0.3),
+        (0.5, 0.3),
+        (0.8, 0.3),
+        (0.2, 0.7),
+        (0.5, 0.7),
+        (0.8, 0.7),
+    )
+
+    assert collection.device.backend == "brainflow"
+    assert collection.device == validation.device
+    assert collection.config.protocol == validation.config.protocol
+    assert collection.config.stimuli == validation.config.stimuli
+    assert collection.config.processing == validation.config.processing
+    assert collection_plan == compile_session_plan(collection.config)
+    assert validation_plan == compile_session_plan(validation.config)
+    assert collection_plan.trial_count == validation_plan.trial_count == 72
+    assert collection_plan.duration_seconds == validation_plan.duration_seconds == 588
+    assert tuple(
+        stimulus.frequency_hz for stimulus in collection.config.stimuli
+    ) == expected_frequencies
+    assert tuple(
+        (stimulus.visual.center_x, stimulus.visual.center_y)
+        for stimulus in collection.config.stimuli
+    ) == expected_positions
+    assert all(
+        stimulus.phase_offset_radians == 0
+        for stimulus in collection.config.stimuli
+    )
+    assert collection.config.processing.candidate_frequencies_hz == expected_frequencies
+    assert collection.config.processing.window.onset_offset_seconds == 0.25
+    assert collection.config.processing.window.length_seconds == 2.0
+    assert collection.config.protocol.stimulation_seconds == 4.0
+    assert collection.config.processing.channels == validation.config.processing.channels
+
+    collection_targets = [
+        step.stimulus_id
+        for step in collection_plan.steps
+        if step.presentation_id is not None
+    ]
+    validation_targets = [
+        step.stimulus_id
+        for step in validation_plan.steps
+        if step.presentation_id is not None
+    ]
+    assert collection_targets != validation_targets
+    expected_ids = {stimulus.id for stimulus in collection.config.stimuli}
+    for targets in (collection_targets, validation_targets):
+        assert all(targets.count(stimulus_id) == 12 for stimulus_id in expected_ids)
+        for offset in range(0, len(targets), 6):
+            assert set(targets[offset:offset + 6]) == expected_ids
 
 
 def test_two_second_profile_matches_short_training_window() -> None:
@@ -173,6 +247,110 @@ def test_verification_override_and_fbtdca_processing(tmp_path) -> None:
         FbccaProcessor(effective, participant_id="OTHER")
 
 
+def test_six_class_verification_scores_mapping_and_metadata(tmp_path) -> None:
+    validation = load_experiment("six-frequency-fbtdca-validation")
+    estimator = FakeFbtdcaEstimator(
+        sample_count=500,
+        scores=(0.1, 0.2, 0.3, 0.4, 0.9, 0.5),
+    )
+    artifact = _artifact(tmp_path, validation, estimator=estimator)
+    effective = enable_fbtdca_verification(validation, artifact)
+    processor = FbccaProcessor(effective, participant_id="P001")
+    window = StimulusWindow(
+        window_id="window-six",
+        presentation_id="presentation-1",
+        trial_id="trial-1",
+        stimulus_id="freq-14",
+        target_frequency_hz=14.0,
+        candidate_frequencies_hz=effective.config.processing.candidate_frequencies_hz,
+        onset_monotonic_timestamp=1.0,
+        offset_monotonic_timestamp=5.0,
+        analysis_start_monotonic_timestamp=1.25,
+        analysis_end_monotonic_timestamp=3.25,
+        sampling_rate_hz=250,
+        channel_names=effective.config.processing.channels,
+        eeg=np.zeros((500, 8), dtype=np.float64),
+        aligned_monotonic_timestamps=1.25 + np.arange(500) / 250,
+        expected_sample_count=500,
+    )
+
+    result = processor.process(window)
+
+    assert result.status == ProcessingStatus.PROCESSED
+    assert result.scores == (0.1, 0.2, 0.3, 0.4, 0.9, 0.5)
+    assert result.predicted_index == 4
+    assert result.predicted_frequency_hz == 14.0
+    assert tuple(processor.classifier.classes_) == tuple(range(6))
+
+    plan = compile_session_plan(effective.config)
+    tracker = VerificationTracker(
+        plan,
+        effective.config,
+        artifact,
+        processor.model_sha256 or "",
+        processor.model_metadata or {},
+    )
+    step = next(item for item in plan.steps if item.presentation_id is not None)
+    target = next(
+        stimulus.frequency_hz
+        for stimulus in effective.config.stimuli
+        if stimulus.id == step.stimulus_id
+    )
+    target_index = effective.config.processing.candidate_frequencies_hz.index(target)
+    tracker.record(ProcessingResult(
+        window_id="tracked-six-window",
+        presentation_id=step.presentation_id or "",
+        status=ProcessingStatus.PROCESSED,
+        processor="fbtdca",
+        elapsed_seconds=0.04,
+        sample_count=500,
+        channel_names=effective.config.processing.channels,
+        candidate_frequencies_hz=effective.config.processing.candidate_frequencies_hz,
+        scores=tuple(1.0 if index == target_index else 0.0 for index in range(6)),
+        predicted_index=target_index,
+        predicted_frequency_hz=target,
+    ))
+    summary = tracker.summary("complete")
+    assert len(summary["confusion_matrix"]) == 6
+    assert all(len(row) == 6 for row in summary["confusion_matrix"])
+    assert len(summary["per_class"]) == 6
+    assert summary["accuracy"] == 1.0
+
+    metadata_mutations = {
+        "participant_id": "OTHER",
+        "sampling_rate_hz": 200.0,
+        "channel_names": list(reversed(validation.config.processing.channels)),
+        "candidate_frequencies_hz": [9.0, 8.0, 10.0, 13.0, 14.0, 15.0],
+        "phase_offsets_radians": [0.0, 0.0, 0.0, 0.0, 0.0, 0.1],
+        "window_onset_offset_seconds": 0.1,
+        "window_length_seconds": 1.5,
+        "notch_frequency_hz": 50.0,
+    }
+    for key, value in metadata_mutations.items():
+        incompatible = joblib.load(artifact)
+        incompatible["metadata"][key] = value
+        incompatible_path = tmp_path / f"incompatible-six-{key}.joblib"
+        joblib.dump(incompatible, incompatible_path)
+        incompatible_effective = enable_fbtdca_verification(
+            validation, incompatible_path
+        )
+        with pytest.raises(ValueError, match=key):
+            FbccaProcessor(incompatible_effective, participant_id="P001")
+
+    incompatible_classes = joblib.load(artifact)
+    incompatible_classes["estimator"] = FakeFbtdcaEstimator(
+        sample_count=500,
+        scores=(0.1, 0.2, 0.3, 0.4, 0.5),
+    )
+    incompatible_classes_path = tmp_path / "incompatible-six-classes.joblib"
+    joblib.dump(incompatible_classes, incompatible_classes_path)
+    incompatible_classes_effective = enable_fbtdca_verification(
+        validation, incompatible_classes_path
+    )
+    with pytest.raises(ValueError, match="estimator classes"):
+        FbccaProcessor(incompatible_classes_effective, participant_id="P001")
+
+
 def test_verification_tracker_builds_scorecard_and_summary(tmp_path) -> None:
     collection = load_experiment("four-frequency-fbtdca")
     artifact = _artifact(tmp_path, collection)
@@ -223,17 +401,49 @@ def test_verification_tracker_builds_scorecard_and_summary(tmp_path) -> None:
     assert not should_show_verification_scorecard("stimulus", snapshot)
 
 
+def test_six_class_scorecard_wraps_over_two_class_lines() -> None:
+    snapshot = VerificationSnapshot(
+        scored_trials=6,
+        correct_trials=5,
+        accuracy=5 / 6,
+        latest_target_frequency_hz=15.0,
+        latest_predicted_frequency_hz=15.0,
+        latest_correct=True,
+        per_class_counts=(
+            (8.0, 1, 1),
+            (9.0, 1, 1),
+            (10.0, 1, 1),
+            (13.0, 1, 1),
+            (14.0, 0, 1),
+            (15.0, 1, 1),
+        ),
+    )
+
+    lines = format_verification_scorecard(snapshot).splitlines()
+
+    assert len(lines) == 3
+    assert lines[1] == "8 Hz 1/1  9 Hz 1/1  10 Hz 1/1"
+    assert lines[2] == "13 Hz 1/1  14 Hz 0/1  15 Hz 1/1"
+
+
 def _write_training_session(
-    root: Path, name: str, participant: str, phase=0.0, repetitions: int = 1
+    root: Path,
+    name: str,
+    participant: str,
+    phase=0.0,
+    repetitions: int = 1,
+    *,
+    config_name: str = "four-frequency-fbtdca",
+    experiment_id: str = DEFAULT_EXPERIMENT_ID,
 ) -> Path:
-    resolved = load_experiment("four-frequency-fbtdca")
+    resolved = load_experiment(config_name)
     path = root / name
     path.mkdir()
     manifest = {
         "status": "complete",
         "run_mode": "run",
         "participant_id": participant,
-        "experiment_id": DEFAULT_EXPERIMENT_ID,
+        "experiment_id": experiment_id,
         "session_id": name,
         "config_hash": "same-config",
     }
@@ -253,8 +463,11 @@ def _write_training_session(
     (path / "acquisition-metadata.json").write_text(
         json.dumps(acquisition), encoding="utf-8"
     )
-    frequencies = [8.0, 9.0, 13.0, 14.0]
-    stimulus_ids = ["freq-8", "freq-9", "freq-13", "freq-14"]
+    stimulus_ids = list(resolved.config.protocol.stimulus_sequence)
+    frequency_by_id = {
+        stimulus.id: stimulus.frequency_hz
+        for stimulus in resolved.config.stimuli
+    }
     events = []
     sequence = stimulus_ids * repetitions
     for index, stimulus_id in enumerate(sequence, 1):
@@ -275,7 +488,7 @@ def _write_training_session(
     eeg = np.zeros((len(timestamps), 8))
     generator = np.random.default_rng(sum(ord(character) for character in name))
     for index, stimulus_id in enumerate(sequence):
-        frequency = frequencies[stimulus_ids.index(stimulus_id)]
+        frequency = frequency_by_id[stimulus_id]
         onset = 0.5 + index * 4.5
         mask = (timestamps >= onset) & (timestamps < onset + 4)
         for channel in range(8):
@@ -336,6 +549,37 @@ def test_raw_sessions_are_discovered_and_extracted(tmp_path) -> None:
             [first, _write_training_session(tmp_path, "phase", "P001", phase=0.5)],
             "P001",
         )
+
+
+def test_six_class_raw_sessions_require_explicit_experiment_id(tmp_path) -> None:
+    experiment_id = "six-frequency-fbtdca-collection"
+    kwargs = {
+        "config_name": "six-frequency-fbtdca",
+        "experiment_id": experiment_id,
+    }
+    first = _write_training_session(tmp_path, "six-a", "P001", **kwargs)
+    second = _write_training_session(tmp_path, "six-b", "P001", **kwargs)
+
+    discovered = discover_collection_sessions(
+        tmp_path,
+        "P001",
+        experiment_id=experiment_id,
+    )
+    dataset = load_fbtdca_dataset(
+        discovered,
+        "P001",
+        experiment_id=experiment_id,
+    )
+
+    assert discovered == (first.resolve(), second.resolve())
+    assert dataset.eeg.shape == (12, 8, 500)
+    assert dataset.labels.tolist() == list(range(6)) * 2
+    assert dataset.candidate_frequencies_hz == (8.0, 9.0, 10.0, 13.0, 14.0, 15.0)
+    assert dataset.window_onset_offset_seconds == 0.25
+    assert dataset.window_length_seconds == 2.0
+
+    with pytest.raises(FbtdcaTrainingError, match="experiment"):
+        load_fbtdca_dataset(discovered, "P001")
 
 
 def test_verification_override_requires_existing_model(tmp_path) -> None:
@@ -486,3 +730,105 @@ def test_real_fbtdca_training_and_artifact_round_trip(tmp_path) -> None:
     assert state["metadata"]["brainda_commit"]
     assert loaded_processor.model_metadata == state["metadata"]
     assert summary_path.is_file()
+
+
+def test_real_six_class_fbtdca_training_and_artifact_round_trip(tmp_path) -> None:
+    pytest.importorskip("brainda")
+    frequencies = (8.0, 9.0, 10.0, 13.0, 14.0, 15.0)
+    samples = 500
+    time = np.arange(samples) / 250
+    trials = []
+    labels = []
+    groups = []
+    generator = np.random.default_rng(20260803)
+    for group in range(2):
+        for repetition in range(3):
+            for label, frequency in enumerate(frequencies):
+                channels = []
+                for channel in range(8):
+                    phase = channel * 0.03 + repetition * 0.01
+                    response = (1 + channel * 0.05) * np.sin(
+                        2 * np.pi * frequency * time + phase
+                    )
+                    channels.append(response + generator.normal(0, 0.05, samples))
+                trials.append(np.stack(channels))
+                labels.append(label)
+                groups.append(group)
+    dataset = FbtdcaDataset(
+        eeg=np.stack(trials),
+        labels=np.asarray(labels),
+        session_groups=np.asarray(groups),
+        session_paths=(tmp_path / "a", tmp_path / "b"),
+        session_ids=("a", "b"),
+        config_hashes=("hash", "hash"),
+        participant_id="P001",
+        sampling_rate_hz=250.0,
+        channel_names=("O1", "O2", "Oz", "PO3", "PO4", "P3", "P4", "Pz"),
+        candidate_frequencies_hz=frequencies,
+        phase_offsets_radians=(0.0,) * len(frequencies),
+        window_onset_offset_seconds=0.25,
+        window_length_seconds=2.0,
+        notch_enabled=True,
+        notch_frequency_hz=60.0,
+        notch_quality_factor=30.0,
+        excluded_trials=(),
+    )
+
+    estimator, validation = train_fbtdca(dataset)
+    model_path, summary_path = save_fbtdca_model(
+        dataset, estimator, validation, tmp_path / "six-model.joblib"
+    )
+
+    state = joblib.load(model_path)
+    scores = state["estimator"].transform(dataset.eeg[:1].copy())
+    effective = enable_fbtdca_verification(
+        load_experiment("six-frequency-fbtdca-validation"), model_path
+    )
+    loaded_processor = FbccaProcessor(effective, participant_id="P001")
+
+    assert state["estimator"].classes_.tolist() == list(range(6))
+    assert scores.shape == (1, 6)
+    assert np.asarray(validation["confusion_matrix"]).shape == (6, 6)
+    assert len(validation["per_class_recall"]) == 6
+    assert loaded_processor.model_metadata["candidate_frequencies_hz"] == list(frequencies)
+    assert summary_path.is_file()
+
+
+def test_six_frequency_notebook_smoke_executes_on_synthetic_sessions(
+    tmp_path, monkeypatch
+) -> None:
+    pytest.importorskip("brainda")
+    experiment_id = "six-frequency-fbtdca-collection"
+    session_root = tmp_path / "sessions"
+    session_root.mkdir()
+    for name in ("notebook-a", "notebook-b"):
+        _write_training_session(
+            session_root,
+            name,
+            "P001",
+            repetitions=3,
+            config_name="six-frequency-fbtdca",
+            experiment_id=experiment_id,
+        )
+    model_path = tmp_path / "six_frequency_fbtdca.joblib"
+    monkeypatch.setenv("SSVEP_PARTICIPANT_ID", "P001")
+    monkeypatch.setenv("SSVEP_SESSION_ROOT", str(session_root))
+    monkeypatch.setenv("SSVEP_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+
+    notebook_path = (
+        Path(__file__).parents[1] / "notebooks" / "six_frequency_fbtdca.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    namespace = {"__name__": "__main__"}
+    for index, cell in enumerate(notebook["cells"]):
+        if cell["cell_type"] == "code":
+            source = "".join(cell["source"])
+            exec(compile(source, f"{notebook_path.name}:cell-{index}", "exec"), namespace)
+
+    state = joblib.load(model_path)
+    assert state["estimator"].classes_.tolist() == list(range(6))
+    assert state["metadata"]["candidate_frequencies_hz"] == [
+        8.0, 9.0, 10.0, 13.0, 14.0, 15.0
+    ]
+    assert Path(namespace["saved_summary"]).is_file()

@@ -189,6 +189,48 @@ flicker. Verification sessions add `verification-results.jsonl` and
 accuracy, the ordered confusion matrix, per-class performance, processing
 latency, and model metadata/hash.
 
+## Six-frequency FBTDCA
+
+The `six-frequency-fbtdca` training profile presents fixed 200x200 squares in a
+3x2 grid: 8, 9, and 10 Hz on the top row and 13, 14, and 15 Hz on the bottom
+row. It records 12 balanced trials per class (72 trials total). The stimulus is
+shown for four seconds, while training and verification use the two-second EEG
+window from 0.25 through 2.25 seconds after confirmed frame-swap onset.
+
+Record at least two complete collection sessions for the same participant:
+
+```powershell
+ssvep-bci validate --config six-frequency-fbtdca
+ssvep-bci run --config six-frequency-fbtdca --participant P012 --session-label six-frequency-run-1
+ssvep-bci run --config six-frequency-fbtdca --participant P012 --session-label six-frequency-run-2
+```
+
+Install the training dependency, open the six-frequency notebook from the BCI
+repository root, set `PARTICIPANT_ID`, and run all cells:
+
+```powershell
+python -m pip install -e ".\ssvep-bci[training]"
+jupyter lab ".\ssvep-bci\notebooks\six_frequency_fbtdca.ipynb"
+```
+
+The notebook discovers only complete non-verification sessions for the
+`six-frequency-fbtdca-collection` experiment, performs leave-one-session-out
+validation, and writes
+`ssvep-bci/models/<participant>/six_frequency_fbtdca.joblib` plus a JSON
+reproducibility summary. Start labeled online verification with the distinct
+validation target order:
+
+```powershell
+ssvep-bci verify `
+  --config six-frequency-fbtdca-validation `
+  --model ".\ssvep-bci\models\P012\six_frequency_fbtdca.joblib" `
+  --participant P012 `
+  --session-label six-frequency-verification-1
+```
+
+Both profiles must retain the same ordered frequencies, zero phases, channel
+order, sampling rate, timing, and notch settings for model compatibility.
+
 ## CLI names
 
 Installation creates the `ssvep-bci` console command. The importable Python

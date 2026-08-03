@@ -211,6 +211,7 @@ def load_fbtdca_dataset(
     session_paths: Iterable[str | Path],
     participant_id: str,
     *,
+    experiment_id: str = DEFAULT_EXPERIMENT_ID,
     window_onset_offset_seconds: float | None = None,
     window_length_seconds: float | None = None,
 ) -> FbtdcaDataset:
@@ -253,7 +254,7 @@ def load_fbtdca_dataset(
             raise FbtdcaTrainingError(f"verification session cannot train a model: {path}")
         if manifest.get("participant_id") != participant_id:
             raise FbtdcaTrainingError(f"participant mismatch in {path}")
-        if manifest.get("experiment_id") != DEFAULT_EXPERIMENT_ID:
+        if manifest.get("experiment_id") != experiment_id:
             raise FbtdcaTrainingError(f"experiment mismatch in {path}")
         if config_hashes and manifest.get("config_hash") != config_hashes[0]:
             raise FbtdcaTrainingError(f"config hash mismatch in {path}")
@@ -285,8 +286,8 @@ def load_fbtdca_dataset(
                 f"({stimulation_seconds:g} seconds)"
             )
         frequencies = tuple(float(value) for value in processing["candidate_frequencies_hz"])
-        if len(frequencies) != 4:
-            raise FbtdcaTrainingError("FBTDCA dataset requires exactly four frequencies")
+        if len(frequencies) < 2:
+            raise FbtdcaTrainingError("FBTDCA dataset requires at least two frequencies")
         stimuli = experiment["stimuli"]
         stimulus_frequencies = {
             str(item["id"]): float(item["frequency_hz"]) for item in stimuli
@@ -366,8 +367,9 @@ def load_fbtdca_dataset(
     assert compatibility is not None
     y = np.asarray(labels, dtype=np.int64)
     run_ids = np.asarray(groups, dtype=np.int64)
+    expected_classes = set(range(len(compatibility["candidate_frequencies_hz"])))
     for group, path in enumerate(paths):
-        if set(y[run_ids == group].tolist()) != set(range(4)):
+        if set(y[run_ids == group].tolist()) != expected_classes:
             raise FbtdcaTrainingError(
                 f"complete epochs in session do not cover all classes: {path}"
             )
@@ -419,13 +421,15 @@ def train_fbtdca(dataset: FbtdcaDataset) -> tuple[Any, dict[str, Any]]:
             f"FBTDCA needs at least {N_COMPONENTS} channels for {N_COMPONENTS} components"
         )
     references = _references(dataset)
+    class_labels = np.arange(len(dataset.candidate_frequencies_hz))
+    expected_classes = set(class_labels.tolist())
     all_true: list[int] = []
     all_predicted: list[int] = []
     folds = []
     for group in np.unique(dataset.session_groups):
         train = dataset.session_groups != group
         test = dataset.session_groups == group
-        if set(dataset.labels[train].tolist()) != set(range(4)):
+        if set(dataset.labels[train].tolist()) != expected_classes:
             raise FbtdcaTrainingError("a leave-one-session-out fold lacks a training class")
         model = _make_model(dataset).fit(
             dataset.eeg[train].copy(), dataset.labels[train], Yf=references
@@ -441,7 +445,7 @@ def train_fbtdca(dataset: FbtdcaDataset) -> tuple[Any, dict[str, Any]]:
         })
         all_true.extend(dataset.labels[test].tolist())
         all_predicted.extend(predicted.tolist())
-    matrix = confusion_matrix(all_true, all_predicted, labels=np.arange(4))
+    matrix = confusion_matrix(all_true, all_predicted, labels=class_labels)
     normalized_matrix = matrix / matrix.sum(axis=1, keepdims=True)
     recalls = normalized_matrix.diagonal()
     report = {
