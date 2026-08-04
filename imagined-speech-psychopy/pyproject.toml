@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imagined-speech-psychopy"
+version = "0.4.1"
+description = "PsychoPy rewrite of the imagined-speech EEG experiment platform"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pydantic>=2.8,<3",
+    "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+ui = ["PyQt6>=6.7,<7"]
+subject = [
+    "psychopy==2026.2.1",
+    "pywinhook==1.6.2; platform_system == 'Windows'",
+]
+acquisition = [
+    "brainflow>=5.16,<6",
+    "numpy>=1.26,<3",
+    "pylsl>=1.17,<2",
+    "scipy>=1.13,<2",
+]
+dev = ["pytest>=8,<9", "pytest-qt>=4.4,<5"]
+all = [
+    "brainflow>=5.16,<6",
+    "numpy>=1.26,<3",
+    "pylsl>=1.17,<2",
+    "PyQt6>=6.7,<7",
+    "psychopy==2026.2.1",
+    "pywinhook==1.6.2; platform_system == 'Windows'",
+    "scipy>=1.13,<2",
+]
+
+[project.scripts]
+imagined-speech-psychopy = "imagined_speech.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["imagined_speech*"]
+
+[tool.setuptools.package-data]
+imagined_speech = ["resources/**/*.yaml"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

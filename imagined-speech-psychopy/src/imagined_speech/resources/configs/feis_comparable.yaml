@@ -1,0 +1,65 @@
+schema_version: 2
+experiment_id: feis_phoneme_comparable
+title: FEIS-Comparable Phoneme Benchmark
+profile: feis_comparable
+random_seed: 20260715
+device_profile: ../devices/synthetic.yaml
+protocol:
+  blocks: 4
+  repetitions_per_stimulus: 10
+  practice_stimulus_ids: [p, s, i, u]
+  practice_repetitions_per_stimulus: 1
+  initial_rest_seconds: 60
+  final_rest_seconds: 60
+  inter_block_break_seconds: 60
+phases:
+  rest: {duration_seconds: 5, instruction: REST}
+  stimulus: {duration_seconds: 5, instruction: Observe or listen to the phoneme}
+  thinking: {duration_seconds: 5, instruction: Imagine repeating the phoneme five times}
+  speaking: {duration_seconds: 5, instruction: Speak the phoneme five times}
+stimuli:
+  - {id: p, label: /p/}
+  - {id: t, label: /t/}
+  - {id: k, label: /k/}
+  - {id: f, label: /f/}
+  - {id: s, label: /s/}
+  - {id: sh, label: /ʃ/}
+  - {id: v, label: /v/}
+  - {id: z, label: /z/}
+  - {id: zh, label: /ʒ/}
+  - {id: m, label: /m/}
+  - {id: n, label: /n/}
+  - {id: ng, label: /ŋ/}
+  - {id: i, label: /i/}
+  - {id: u, label: /u/}
+  - {id: ae, label: /æ/}
+  - {id: open_o, label: /ɔ/}
+presentation:
+  show_countdown: true
+  show_progress: true
+  audio: {enabled: false, volume: 0.8, require_all_stimuli: false}
+  psychopy:
+    monitor_name: testMonitor
+    gamma: 1.0
+    refresh_rate_hz: 60
+    screen_index: 1
+    window_mode: FULL_SCREEN
+    window_size_px: null
+    hide_cursor: true
+    use_retina: true
+    check_timing: true
+    wait_blanking: true
+    text: {font: Arial, headline_height_px: 80, instruction_height_px: 30, progress_height_px: 22, countdown_height_px: 34, primary_color: "#f5f7fa", muted_color: "#aeb6c4", accent_color: "#9dc1ff"}
+    assets: {max_width_px: 900, max_height_px: 500, interpolate: true}
+    preflight_warmup_frames: 10
+    preflight_frame_count: 120
+    refresh_rate_tolerance_hz: 0.5
+    max_frame_interval_factor: 1.5
+    max_dropped_frame_fraction: 0.01
+    max_ipc_rtt_ms: 25
+    frame_ack_timeout_seconds: 2
+    require_timing_quality: true
+    audio_backend: ptb
+    audio_latency_mode: 3
+qc: {enabled: false, line_frequency_hz: 50}
+output: {root_dir: ../../../../sessions}

@@ -1,0 +1,23 @@
+# Device profiles retain schema version 1.
+schema_version: 1
+profile_id: lsl_8ch_eeg
+backend: lsl
+board_id: null
+sampling_rate_hz: 250
+eeg_channels:
+  - {board_channel: 0, label: F3, position: F3}
+  - {board_channel: 1, label: F4, position: F4}
+  - {board_channel: 2, label: C3, position: C3}
+  - {board_channel: 3, label: C4, position: C4}
+  - {board_channel: 4, label: T7, position: T7}
+  - {board_channel: 5, label: T8, position: T8}
+  - {board_channel: 6, label: P3, position: P3}
+  - {board_channel: 7, label: P4, position: P4}
+reference: Supplied by the LSL stream metadata
+ground: Supplied by the LSL stream metadata
+connection:
+  stream_name: imagined-speech-synthetic
+  stream_type: EEG
+  resolve_timeout_seconds: 5
+pre_roll_seconds: 1
+post_roll_seconds: 1

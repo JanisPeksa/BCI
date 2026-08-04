@@ -1,0 +1,22 @@
+# Device profiles retain schema version 1.
+schema_version: 1
+profile_id: cyton_8ch_replay
+backend: replay
+board_id: -3
+sampling_rate_hz: 250
+eeg_channels:
+  - {board_channel: 1, label: F3, position: F3}
+  - {board_channel: 2, label: F4, position: F4}
+  - {board_channel: 3, label: C3, position: C3}
+  - {board_channel: 4, label: C4, position: C4}
+  - {board_channel: 5, label: T7, position: T7}
+  - {board_channel: 6, label: T8, position: T8}
+  - {board_channel: 7, label: P3, position: P3}
+  - {board_channel: 8, label: P4, position: P4}
+reference: Loaded from recorded session metadata
+ground: Loaded from recorded session metadata
+connection:
+  file: null
+  master_board: 0
+pre_roll_seconds: 1
+post_roll_seconds: 1
