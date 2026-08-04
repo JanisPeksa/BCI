@@ -231,6 +231,21 @@ ssvep-bci verify `
 Both profiles must retain the same ordered frequencies, zero phases, channel
 order, sampling rate, timing, and notch settings for model compatibility.
 
+For sessions recorded with the shortened 2.25-second stimulus, use the
+`six-frequency-fbtdca-2s` profile and the dedicated notebook. It discards the
+first 0.25 seconds after confirmed onset and trains on the following 2.0
+seconds, saving `six_frequency_fbtdca_2s.joblib`:
+
+```powershell
+ssvep-bci validate --config six-frequency-fbtdca-2s
+ssvep-bci run --config six-frequency-fbtdca-2s --participant P012 --session-label six-frequency-2s-run-1
+ssvep-bci run --config six-frequency-fbtdca-2s --participant P012 --session-label six-frequency-2s-run-2
+jupyter lab ".\ssvep-bci\notebooks\six_frequency_fbtdca_2s.ipynb"
+```
+
+Set `SSVEP_SESSION_PATHS` to a path-separated list of session folders when
+the session root contains multiple six-frequency timing profiles.
+
 ## CLI names
 
 Installation creates the `ssvep-bci` console command. The importable Python

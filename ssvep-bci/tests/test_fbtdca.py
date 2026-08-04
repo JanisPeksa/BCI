@@ -180,7 +180,7 @@ def test_two_second_profile_matches_short_training_window() -> None:
 
     assert resolved.config.processing.window.onset_offset_seconds == 0.25
     assert resolved.config.processing.window.length_seconds == 2.0
-    assert resolved.config.protocol.stimulation_seconds == 4.0
+    assert resolved.config.protocol.stimulation_seconds == 2.25
     assert tuple(resolved.config.processing.candidate_frequencies_hz) == (
         8.0,
         9.0,
