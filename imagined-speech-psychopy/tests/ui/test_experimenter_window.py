@@ -19,14 +19,22 @@ def test_operator_controls_follow_remote_snapshot_state() -> None:
     assert ready.abort
     assert not ready.create_session
 
-    running = controls_for("running", "running", in_trial=True)
+    running = controls_for(
+        "running", "running", in_trial=True, stage_type="experiment"
+    )
     assert running.pause
-    assert running.repeat
+    assert running.repeat_trial
+    assert running.repeat_block
     assert not running.resume
 
     paused = controls_for("running", "paused", in_trial=True)
     assert paused.resume
-    assert paused.repeat
+    assert paused.repeat_trial
+
+    checkpoint = controls_for("running", "awaiting_experiment")
+    assert checkpoint.start_experiment
+    assert checkpoint.repeat_last_practice_trial
+    assert checkpoint.refit
 
     finalized = controls_for("finalized", "completed")
     assert finalized.create_session

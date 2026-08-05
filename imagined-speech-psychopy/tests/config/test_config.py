@@ -182,6 +182,40 @@ def test_marker_collisions_are_rejected(tmp_path: Path) -> None:
         load_experiment(target)
 
 
+def test_practice_zero_is_explicitly_disabled() -> None:
+    config = load_experiment(default_config_path()).config
+    disabled = config.protocol.practice.model_copy(update={
+        "blocks": 0,
+        "stimulus_ids": (),
+        "repetitions_per_stimulus": 0,
+    })
+    updated = config.model_copy(update={
+        "protocol": config.protocol.model_copy(update={"practice": disabled})
+    })
+
+    assert updated.protocol.practice.blocks == 0
+    assert updated.practice_trials == 0
+
+
+@pytest.mark.parametrize(
+    "practice",
+    [
+        {"blocks": 0, "stimulus_ids": ["p"], "repetitions_per_stimulus": 0},
+        {"blocks": 0, "stimulus_ids": [], "repetitions_per_stimulus": 1},
+        {"blocks": 1, "stimulus_ids": [], "repetitions_per_stimulus": 0},
+    ],
+)
+def test_contradictory_practice_configuration_is_rejected(
+    practice: dict[str, object],
+) -> None:
+    config = load_experiment(default_config_path()).config
+    data = config.model_dump(mode="python")
+    data["protocol"]["practice"] = practice
+
+    with pytest.raises(ValueError, match="practice with blocks"):
+        type(config).model_validate(data)
+
+
 def test_preview_command_uses_smoke_profile(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["preview"]) == 0
 

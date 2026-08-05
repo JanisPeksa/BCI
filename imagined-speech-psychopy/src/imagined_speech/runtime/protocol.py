@@ -14,7 +14,15 @@ from imagined_speech.events import (
     NullEventSink,
     ProtocolEvent,
 )
-from imagined_speech.planning import BlockPlan, BreakPlan, RestPlan, SessionPlan, TrialPlan
+from imagined_speech.planning import (
+    BreakPlan,
+    ExperimentBlockPlan,
+    PracticePlan,
+    RestPlan,
+    SessionPlan,
+    TrialGroupPlan,
+    TrialPlan,
+)
 from imagined_speech.runtime.clock import ProtocolClock
 from imagined_speech.runtime.view_state import ViewState
 
@@ -23,6 +31,7 @@ class RunState(StrEnum):
     READY = "ready"
     AWAITING_PRESENTATION = "awaiting_presentation"
     AWAITING_NEUTRAL = "awaiting_neutral"
+    AWAITING_EXPERIMENT = "awaiting_experiment"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -36,8 +45,9 @@ TERMINAL_STATES = {RunState.COMPLETED, RunState.ABORTED, RunState.FAILED}
 @dataclass(frozen=True)
 class _Context:
     step_id: str | None = None
+    group_id: str | None = None
+    stage_type: str | None = None
     block_id: str | None = None
-    block_type: str | None = None
     block_number: int | None = None
     block_count: int | None = None
     trial_id: str | None = None
@@ -55,6 +65,7 @@ class _Context:
 class _EventAction:
     event_type: EventType
     context: _Context
+    payload: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +75,14 @@ class _TimedAction:
     context: _Context
 
 
-RuntimeAction = _EventAction | _TimedAction
+@dataclass(frozen=True)
+class _CheckpointAction:
+    screen: str
+    context: _Context
+
+
+PresentableAction = _TimedAction | _CheckpointAction
+RuntimeAction = _EventAction | PresentableAction
 
 
 def _headline(screen: str, stimulus_label: str | None = None) -> str:
@@ -78,6 +96,7 @@ def _headline(screen: str, stimulus_label: str | None = None) -> str:
         Phase.SPEAKING.value: "SPEAKING",
         "post_trial": "",
         "break": "BREAK",
+        "practice_complete": "PRACTICE COMPLETE",
     }.get(screen, screen.upper())
 
 
@@ -88,18 +107,20 @@ def _display_instruction(screen: str, instruction: str) -> str:
 
 
 def _trial_runtime_actions(
-    block: BlockPlan,
+    group: TrialGroupPlan,
     trial: TrialPlan,
     trial_count: int,
     attempt: int,
 ) -> list[RuntimeAction]:
     actions: list[RuntimeAction] = []
+    group_context = _group_context(group)
     trial_context = _Context(
         step_id=trial.trial_id,
-        block_id=block.block_id,
-        block_type=block.block_type,
-        block_number=block.block_number,
-        block_count=block.block_count,
+        group_id=group_context.group_id,
+        stage_type=group_context.stage_type,
+        block_id=group_context.block_id,
+        block_number=group_context.block_number,
+        block_count=group_context.block_count,
         trial_id=trial.trial_id,
         trial_number=trial.trial_number,
         trial_count=trial_count,
@@ -111,10 +132,11 @@ def _trial_runtime_actions(
     for phase in trial.phases:
         phase_context = _Context(
             step_id=phase.step_id,
-            block_id=block.block_id,
-            block_type=block.block_type,
-            block_number=block.block_number,
-            block_count=block.block_count,
+            group_id=group_context.group_id,
+            stage_type=group_context.stage_type,
+            block_id=group_context.block_id,
+            block_number=group_context.block_number,
+            block_count=group_context.block_count,
             trial_id=trial.trial_id,
             trial_number=trial.trial_number,
             trial_count=trial_count,
@@ -150,11 +172,19 @@ def _trial_runtime_actions(
     return actions
 
 
-def _block_context(block: BlockPlan) -> _Context:
+def _group_context(group: TrialGroupPlan) -> _Context:
+    if isinstance(group, PracticePlan):
+        return _Context(
+            step_id=group.practice_id,
+            group_id=group.practice_id,
+            stage_type="practice",
+        )
+    block = group
     return _Context(
         step_id=block.block_id,
+        group_id=block.block_id,
+        stage_type="experiment",
         block_id=block.block_id,
-        block_type=block.block_type,
         block_number=block.block_number,
         block_count=block.block_count,
     )
@@ -197,12 +227,31 @@ def build_runtime_actions(plan: SessionPlan) -> tuple[RuntimeAction, ...]:
             )
             continue
 
-        assert isinstance(item, BlockPlan)
-        block_context = _block_context(item)
+        if isinstance(item, PracticePlan):
+            practice_context = _group_context(item)
+            actions.append(_EventAction(EventType.PRACTICE_STARTED, practice_context))
+            for trial in item.trials:
+                actions.extend(
+                    _trial_runtime_actions(item, trial, practice_total, attempt=1)
+                )
+            actions.append(_EventAction(EventType.PRACTICE_ENDED, practice_context))
+            actions.append(_CheckpointAction(
+                screen="practice_complete",
+                context=replace(
+                    practice_context,
+                    step_id="practice-complete",
+                    instruction="Please wait for the researcher.",
+                ),
+            ))
+            continue
+
+        assert isinstance(item, ExperimentBlockPlan)
+        block_context = _group_context(item)
         actions.append(_EventAction(EventType.BLOCK_STARTED, block_context))
-        trial_count = practice_total if item.block_type == "practice" else experiment_total
         for trial in item.trials:
-            actions.extend(_trial_runtime_actions(item, trial, trial_count, attempt=1))
+            actions.extend(
+                _trial_runtime_actions(item, trial, experiment_total, attempt=1)
+            )
         actions.append(_EventAction(EventType.BLOCK_ENDED, block_context))
     return tuple(actions)
 
@@ -224,22 +273,32 @@ class ProtocolEngine:
         self.state = RunState.READY
         self._actions = list(build_runtime_actions(plan))
         self._cursor = 0
-        self._current: _TimedAction | None = None
+        self._current: PresentableAction | None = None
         self._deadline: float | None = None
         self._paused_remaining = 0.0
         self._sequence = 0
         self._stimulus_indexes = {
             stimulus.id: index for index, stimulus in enumerate(config.stimuli)
         }
-        self._blocks = {block.block_id: block for block in plan.blocks}
+        self._blocks = {block.block_id: block for block in plan.experiment_blocks}
+        self._groups = {
+            (
+                group.practice_id
+                if isinstance(group, PracticePlan)
+                else group.block_id
+            ): group
+            for group in plan.trial_groups
+        }
         self._trials = {
-            trial.trial_id: trial for block in plan.blocks for trial in block.trials
+            trial.trial_id: trial
+            for group in plan.trial_groups
+            for trial in group.trials
         }
         self._attempts: dict[str, int] = {}
         self.failure_reason: str | None = None
 
     @property
-    def current_action(self) -> _TimedAction | None:
+    def current_action(self) -> PresentableAction | None:
         return self._current
 
     @property
@@ -263,6 +322,7 @@ class ProtocolEngine:
             "paused_remaining_seconds": self._paused_remaining,
             "current_screen": self._current.screen if self._current else None,
             "current_step_id": context.step_id if context else None,
+            "stage_type": context.stage_type if context else None,
             "block_id": context.block_id if context else None,
             "trial_id": context.trial_id if context else None,
             "trial_number": context.trial_number if context else None,
@@ -314,7 +374,7 @@ class ProtocolEngine:
         self, source: EventSource = EventSource.OPERATOR
     ) -> None:
         context = self._require_active_trial("repeat trial")
-        assert context.trial_id is not None and context.block_id is not None
+        assert context.trial_id is not None and context.group_id is not None
         was_paused = self.state == RunState.PAUSED
         reuse_unpresented_attempt = self._current_attempt_is_unpresented()
         previous_attempt = context.attempt or self._attempts.get(context.trial_id, 1)
@@ -325,7 +385,7 @@ class ProtocolEngine:
             and action.context.trial_id == context.trial_id
         )
 
-        block = self._blocks[context.block_id]
+        group = self._groups[context.group_id]
         trial = self._trials[context.trial_id]
         next_attempt = (
             previous_attempt
@@ -334,13 +394,13 @@ class ProtocolEngine:
         )
         trial_count = (
             self.plan.practice_trial_count
-            if block.block_type == "practice"
+            if isinstance(group, PracticePlan)
             else self.plan.experiment_trial_count
         )
         self._actions[self._cursor:self._cursor] = _trial_runtime_actions(
-            block, trial, trial_count, next_attempt
+            group, trial, trial_count, next_attempt
         )
-        repeat_context = self._trial_context(block, trial, next_attempt)
+        repeat_context = self._trial_context(group, trial, next_attempt)
         self._emit(
             EventType.TRIAL_REPEATED,
             repeat_context,
@@ -357,7 +417,8 @@ class ProtocolEngine:
         self, source: EventSource = EventSource.OPERATOR
     ) -> None:
         context = self._require_active_trial("repeat block")
-        assert context.block_id is not None
+        if context.stage_type != "experiment" or context.block_id is None:
+            raise RuntimeError("cannot repeat block during practice")
         was_paused = self.state == RunState.PAUSED
         block = self._blocks[context.block_id]
         superseded_attempts = {
@@ -372,31 +433,97 @@ class ProtocolEngine:
             and action.context.block_id == block.block_id
         )
 
-        trial_count = (
-            self.plan.practice_trial_count
-            if block.block_type == "practice"
-            else self.plan.experiment_trial_count
-        )
+        trial_count = self.plan.experiment_trial_count
         repeated_actions: list[RuntimeAction] = []
         for trial in block.trials:
             next_attempt = self._attempts.get(trial.trial_id, 0) + 1
             repeated_actions.extend(
                 _trial_runtime_actions(block, trial, trial_count, next_attempt)
             )
-        repeated_actions.append(_EventAction(EventType.BLOCK_ENDED, _block_context(block)))
+        repeated_actions.append(_EventAction(EventType.BLOCK_ENDED, _group_context(block)))
         self._actions[self._cursor:self._cursor] = repeated_actions
         self._emit(
             EventType.BLOCK_REPEATED,
-            _block_context(block),
+            _group_context(block),
             source,
             payload={"superseded_attempts": superseded_attempts},
         )
         self._restart_after_recovery(was_paused)
 
+    def start_experiment(
+        self, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        del source
+        if self.state != RunState.AWAITING_EXPERIMENT:
+            raise RuntimeError(f"cannot start experiment from {self.state.value}")
+        self._current = None
+        self.state = RunState.RUNNING
+        self._advance_to_timed(self.clock.monotonic())
+
+    def repeat_last_practice_trial(
+        self, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        if self.state != RunState.AWAITING_EXPERIMENT:
+            raise RuntimeError(
+                f"cannot repeat last practice trial from {self.state.value}"
+            )
+        practice = self.plan.practice
+        if practice is None:
+            raise RuntimeError("cannot repeat practice when practice is disabled")
+        trial = practice.trials[-1]
+        previous_attempt = self._attempts.get(trial.trial_id, 1)
+        next_attempt = previous_attempt + 1
+        context = self._trial_context(practice, trial, next_attempt)
+        practice_context = _group_context(practice)
+        retry_actions: list[RuntimeAction] = [
+            _EventAction(
+                EventType.PRACTICE_STARTED,
+                practice_context,
+                payload={"retry": True},
+            ),
+            *_trial_runtime_actions(
+                practice,
+                trial,
+                self.plan.practice_trial_count,
+                next_attempt,
+            ),
+            _EventAction(
+                EventType.PRACTICE_ENDED,
+                practice_context,
+                payload={"retry": True},
+            ),
+            _CheckpointAction(
+                screen="practice_complete",
+                context=replace(
+                    practice_context,
+                    step_id="practice-complete",
+                    instruction="Please wait for the researcher.",
+                ),
+            ),
+        ]
+        self._actions[self._cursor:self._cursor] = retry_actions
+        self._emit(
+            EventType.TRIAL_REPEATED,
+            context,
+            source,
+            payload={
+                "superseded_attempt": previous_attempt,
+                "new_attempt": next_attempt,
+                "checkpoint_retry": True,
+            },
+        )
+        self._current = None
+        self.state = RunState.RUNNING
+        self._advance_to_timed(self.clock.monotonic())
+
     def record_refit(
         self, note: str, source: EventSource = EventSource.OPERATOR
     ) -> None:
-        if self.state not in {RunState.RUNNING, RunState.PAUSED}:
+        if self.state not in {
+            RunState.RUNNING,
+            RunState.PAUSED,
+            RunState.AWAITING_EXPERIMENT,
+        }:
             raise RuntimeError(f"cannot record refit from {self.state.value}")
         cleaned = note.strip()
         if not cleaned:
@@ -410,7 +537,12 @@ class ProtocolEngine:
         )
 
     def abort(self, source: EventSource = EventSource.OPERATOR) -> None:
-        if self.state not in {RunState.READY, RunState.RUNNING, RunState.PAUSED}:
+        if self.state not in {
+            RunState.READY,
+            RunState.RUNNING,
+            RunState.PAUSED,
+            RunState.AWAITING_EXPERIMENT,
+        }:
             raise RuntimeError(f"cannot abort protocol from {self.state.value}")
         context = self._current.context if self._current else _Context()
         if self.state in {RunState.RUNNING, RunState.PAUSED}:
@@ -455,11 +587,31 @@ class ProtocolEngine:
                 None,
                 self._paused_remaining,
                 self._current.duration_seconds if self._current else 0,
-                context.block_type,
+                context.stage_type,
                 context.block_number,
                 context.block_count,
                 context.trial_number,
                 context.trial_count,
+            )
+        if self.state == RunState.AWAITING_EXPERIMENT:
+            context = self._current.context if self._current else _Context(
+                stage_type="practice"
+            )
+            return ViewState(
+                run_state=self.state,
+                screen="practice_complete",
+                step_id=context.step_id,
+                headline="PRACTICE COMPLETE",
+                instruction="Please wait for the researcher.",
+                stimulus_id=None,
+                stimulus_label=None,
+                remaining_seconds=0,
+                duration_seconds=0,
+                stage_type="practice",
+                block_number=None,
+                block_count=None,
+                trial_number=None,
+                trial_count=self.plan.practice_trial_count,
             )
         if self.state in TERMINAL_STATES:
             headline = {
@@ -484,7 +636,7 @@ class ProtocolEngine:
             stimulus_label=context.stimulus_label,
             remaining_seconds=self.remaining_seconds,
             duration_seconds=self._current.duration_seconds,
-            block_type=context.block_type,
+            stage_type=context.stage_type,
             block_number=context.block_number,
             block_count=context.block_count,
             trial_number=context.trial_number,
@@ -506,9 +658,14 @@ class ProtocolEngine:
                     action.event_type,
                     action.context,
                     EventSource.ENGINE,
-                    payload=payload,
+                    payload=action.payload or payload,
                 )
                 continue
+            if isinstance(action, _CheckpointAction):
+                self._current = action
+                self._deadline = None
+                self.state = RunState.AWAITING_EXPERIMENT
+                return
             self._current = action
             self._deadline = anchor + action.duration_seconds
             return
@@ -527,19 +684,21 @@ class ProtocolEngine:
         return False
 
     def _trial_context(
-        self, block: BlockPlan, trial: TrialPlan, attempt: int
+        self, group: TrialGroupPlan, trial: TrialPlan, attempt: int
     ) -> _Context:
         trial_count = (
             self.plan.practice_trial_count
-            if block.block_type == "practice"
+            if isinstance(group, PracticePlan)
             else self.plan.experiment_trial_count
         )
+        group_context = _group_context(group)
         return _Context(
             step_id=trial.trial_id,
-            block_id=block.block_id,
-            block_type=block.block_type,
-            block_number=block.block_number,
-            block_count=block.block_count,
+            group_id=group_context.group_id,
+            stage_type=group_context.stage_type,
+            block_id=group_context.block_id,
+            block_number=group_context.block_number,
+            block_count=group_context.block_count,
             trial_id=trial.trial_id,
             trial_number=trial.trial_number,
             trial_count=trial_count,
@@ -558,12 +717,12 @@ class ProtocolEngine:
                 EventSource.ENGINE,
                 payload={"outcome": outcome},
             )
-        if context.trial_id is not None and context.block_id is not None:
-            block = self._blocks[context.block_id]
+        if context.trial_id is not None and context.group_id is not None:
+            group = self._groups[context.group_id]
             trial = self._trials[context.trial_id]
             self._emit(
                 EventType.TRIAL_ENDED,
-                self._trial_context(block, trial, context.attempt or 1),
+                self._trial_context(group, trial, context.attempt or 1),
                 EventSource.ENGINE,
                 payload={"outcome": outcome},
             )
@@ -577,10 +736,17 @@ class ProtocolEngine:
         context = self._current.context
         if context.trial_id is not None:
             self._close_current_trial(outcome)
-            if context.block_id is not None:
+            if context.stage_type == "experiment" and context.block_id is not None:
                 self._emit(
                     EventType.BLOCK_ENDED,
-                    _block_context(self._blocks[context.block_id]),
+                    _group_context(self._blocks[context.block_id]),
+                    EventSource.ENGINE,
+                    payload={"outcome": outcome},
+                )
+            elif context.stage_type == "practice" and self.plan.practice is not None:
+                self._emit(
+                    EventType.PRACTICE_ENDED,
+                    _group_context(self.plan.practice),
                     EventSource.ENGINE,
                     payload={"outcome": outcome},
                 )
@@ -634,6 +800,8 @@ class ProtocolEngine:
             EventType.BLOCK_ENDED: markers.block_end,
             EventType.BREAK_STARTED: markers.break_start,
             EventType.BREAK_ENDED: markers.break_end,
+            EventType.PRACTICE_STARTED: markers.practice_start,
+            EventType.PRACTICE_ENDED: markers.practice_end,
             EventType.TRIAL_STARTED: markers.trial_start,
             EventType.TRIAL_ENDED: markers.trial_end,
             EventType.REST_STARTED: markers.phase_start[Phase.REST],
@@ -680,8 +848,8 @@ class ProtocolEngine:
                 source=source,
                 session_id=self.session_id,
                 plan_id=self.plan.plan_id,
+                stage_type=context.stage_type,
                 block_id=context.block_id,
-                block_type=context.block_type,
                 block_number=context.block_number,
                 trial_id=context.trial_id,
                 trial_number=context.trial_number,
@@ -834,7 +1002,9 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         self.state = RunState.AWAITING_NEUTRAL
 
     def repeat_current_block(self, source: EventSource = EventSource.OPERATOR) -> None:
-        self._require_active_trial("repeat block")
+        context = self._require_active_trial("repeat block")
+        if context.stage_type != "experiment":
+            raise RuntimeError("cannot repeat block during practice")
         if self.state == RunState.PAUSED:
             super().repeat_current_block(source)
             return
@@ -852,6 +1022,9 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         if self.state == RunState.PAUSED:
             super().record_refit(cleaned, source)
             return
+        if self.state == RunState.AWAITING_EXPERIMENT:
+            super().record_refit(cleaned, source)
+            return
         if self.state != RunState.RUNNING or self._current is None:
             raise RuntimeError(f"cannot record refit from {self.state.value}")
         self._pending_control = _PendingControl("refit", source, cleaned)
@@ -866,12 +1039,13 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             RunState.PAUSED,
             RunState.AWAITING_PRESENTATION,
             RunState.AWAITING_NEUTRAL,
+            RunState.AWAITING_EXPERIMENT,
         }:
             raise RuntimeError(f"cannot abort protocol from {self.state.value}")
         if self.state == RunState.READY:
             super().abort(source)
             return
-        if self.state == RunState.PAUSED:
+        if self.state in {RunState.PAUSED, RunState.AWAITING_EXPERIMENT}:
             # Paused already means neutral has been acknowledged.
             super().abort(source)
             return
@@ -886,7 +1060,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         if self.state == RunState.READY:
             self.fail(reason)
             return
-        if self.state == RunState.PAUSED:
+        if self.state in {RunState.PAUSED, RunState.AWAITING_EXPERIMENT}:
             self.fail(reason)
             return
         self._pending_control = _PendingControl(f"fail:{reason}", EventSource.SYSTEM)
@@ -979,8 +1153,12 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             self._pending_events.clear()
             self._presentation_requested_at = None
             assert self._current is not None
-            self._deadline = monotonic_seconds + self._current.duration_seconds
-            self.state = RunState.RUNNING
+            if isinstance(self._current, _CheckpointAction):
+                self._deadline = None
+                self.state = RunState.AWAITING_EXPERIMENT
+            else:
+                self._deadline = monotonic_seconds + self._current.duration_seconds
+                self.state = RunState.RUNNING
             return
 
         if self.state != RunState.RUNNING or self._current is None:
@@ -1014,7 +1192,11 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         self._presentation_counter += 1
         self._presentation_revision += 1
         self._presentation_id = expected_id
-        self._deadline = monotonic_seconds + next_action.duration_seconds
+        if isinstance(next_action, _CheckpointAction):
+            self._deadline = None
+            self.state = RunState.AWAITING_EXPERIMENT
+        else:
+            self._deadline = monotonic_seconds + next_action.duration_seconds
 
     def confirm_subject_abort(
         self,
@@ -1034,7 +1216,11 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             self._event_occurrence_override = None
 
     def view_state(self) -> ViewState:
-        if self.state in {RunState.AWAITING_PRESENTATION, RunState.AWAITING_NEUTRAL}:
+        if self.state in {
+            RunState.AWAITING_PRESENTATION,
+            RunState.AWAITING_NEUTRAL,
+            RunState.AWAITING_EXPERIMENT,
+        }:
             if self._current is None:
                 return super().view_state()
             return self._view_for(
@@ -1103,7 +1289,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         self._presentation_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_PRESENTATION
 
-    def _peek_next(self) -> tuple[_TimedAction | None, list[_EventAction], int]:
+    def _peek_next(self) -> tuple[PresentableAction | None, list[_EventAction], int]:
         events: list[_EventAction] = []
         cursor = self._cursor
         while cursor < len(self._actions):
@@ -1131,13 +1317,13 @@ class FrameLockedProtocolEngine(ProtocolEngine):
                 action.event_type,
                 action.context,
                 EventSource.ENGINE,
-                payload=payload,
+                payload=action.payload or payload,
                 occurrence=occurrence,
             )
 
     def _view_for(
         self,
-        action: _TimedAction,
+        action: PresentableAction,
         presentation_id: str | None,
         revision: int,
     ) -> ViewState:
@@ -1155,8 +1341,10 @@ class FrameLockedProtocolEngine(ProtocolEngine):
                 if self.state == RunState.PAUSED
                 else self.remaining_seconds
             ),
-            duration_seconds=action.duration_seconds,
-            block_type=context.block_type,
+            duration_seconds=(
+                action.duration_seconds if isinstance(action, _TimedAction) else 0
+            ),
+            stage_type=context.stage_type,
             block_number=context.block_number,
             block_count=context.block_count,
             trial_number=context.trial_number,
@@ -1166,7 +1354,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         )
 
     @staticmethod
-    def _make_presentation_id(action: _TimedAction, counter: int) -> str:
+    def _make_presentation_id(action: PresentableAction, counter: int) -> str:
         step = action.context.step_id or action.screen
         attempt = action.context.attempt or 0
         return f"presentation-{counter:06d}-{step}-a{attempt}"

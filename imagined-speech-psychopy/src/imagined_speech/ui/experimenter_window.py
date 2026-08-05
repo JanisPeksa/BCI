@@ -74,9 +74,12 @@ class OperatorControlState:
     init_subject_ui: bool
     subject_ui_initializing: bool
     start_protocol: bool
+    start_experiment: bool
     pause: bool
     resume: bool
-    repeat: bool
+    repeat_trial: bool
+    repeat_block: bool
+    repeat_last_practice_trial: bool
     refit: bool
     abort: bool
 
@@ -86,6 +89,7 @@ def controls_for(
     engine_state: str | None,
     *,
     in_trial: bool = False,
+    stage_type: str | None = None,
     subject_connected: bool = False,
     subject_initializing: bool = False,
 ) -> OperatorControlState:
@@ -104,10 +108,17 @@ def controls_for(
             and (subject_connected or subject_initializing)
         ),
         start_protocol=runtime_state == "ready" and engine_state == "ready",
+        start_experiment=engine_state == "awaiting_experiment",
         pause=engine_state == "running",
         resume=engine_state == "paused",
-        repeat=engine_state in {"running", "paused"} and in_trial,
-        refit=engine_state in {"running", "paused"},
+        repeat_trial=engine_state in {"running", "paused"} and in_trial,
+        repeat_block=(
+            engine_state in {"running", "paused"}
+            and in_trial
+            and stage_type == "experiment"
+        ),
+        repeat_last_practice_trial=engine_state == "awaiting_experiment",
+        refit=engine_state in {"running", "paused", "awaiting_experiment"},
         abort=active,
     )
 
@@ -375,6 +386,7 @@ class ExperimenterWindow(QMainWindow):
             state.runtime_state,
             state.engine_state,
             in_trial=state.view_state.trial_number is not None,
+            stage_type=state.view_state.stage_type,
             subject_connected=bool(
                 self._service_state and self._service_state.subject_connected
             ),

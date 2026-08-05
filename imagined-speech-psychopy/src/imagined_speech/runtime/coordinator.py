@@ -668,6 +668,10 @@ class SessionRuntime:
                 self.engine.repeat_current_trial(event_source)
             elif command == OperatorCommand.REPEAT_BLOCK:
                 self.engine.repeat_current_block(event_source)
+            elif command == OperatorCommand.START_EXPERIMENT:
+                self.engine.start_experiment(event_source)
+            elif command == OperatorCommand.REPEAT_LAST_PRACTICE_TRIAL:
+                self.engine.repeat_last_practice_trial(event_source)
             elif command == OperatorCommand.REFIT:
                 self.engine.record_refit(note or "", event_source)
             elif command == OperatorCommand.ABORT:
@@ -705,6 +709,13 @@ class SessionRuntime:
                     "start_protocol accepted; acquisition pre-roll started; protocol "
                     "will await its first presentation after pre-roll"
                 )
+            elif command == OperatorCommand.START_EXPERIMENT:
+                reason = "start_experiment accepted; experiment block 1 is starting"
+            elif command == OperatorCommand.REPEAT_LAST_PRACTICE_TRIAL:
+                reason = (
+                    "repeat_last_practice_trial accepted; final practice trial retry "
+                    "is starting"
+                )
 
         record = self.writer.record_operator_command(
             command=command,
@@ -716,6 +727,7 @@ class SessionRuntime:
             note=note.strip() if note and note.strip() else None,
             state_before=before.value,
             resulting_state=self.engine.state.value,
+            stage_type=context.stage_type if context else None,
             block_id=context.block_id if context else None,
             trial_id=context.trial_id if context else None,
             attempt=context.attempt if context else None,

@@ -21,12 +21,24 @@ from imagined_speech.runtime.simulation import run_virtual
 RESOURCE_ROOT = Path(__file__).parents[2] / "src" / "imagined_speech" / "resources"
 
 
-def make_engine() -> tuple[ProtocolEngine, VirtualClock, MemoryEventSink]:
+def make_engine(
+    *, practice: bool = True
+) -> tuple[ProtocolEngine, VirtualClock, MemoryEventSink]:
     resolved = load_experiment(default_config_path())
-    plan = compile_session_plan(resolved.config)
+    config = resolved.config
+    if not practice:
+        disabled = config.protocol.practice.model_copy(update={
+            "blocks": 0,
+            "stimulus_ids": (),
+            "repetitions_per_stimulus": 0,
+        })
+        config = config.model_copy(update={
+            "protocol": config.protocol.model_copy(update={"practice": disabled})
+        })
+    plan = compile_session_plan(config)
     clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
     sink = MemoryEventSink()
-    engine = ProtocolEngine("test-session", plan, resolved.config, clock, sink)
+    engine = ProtocolEngine("test-session", plan, config, clock, sink)
     return engine, clock, sink
 
 
@@ -152,11 +164,11 @@ def test_repeat_trial_preserves_superseded_attempt_and_restarts_paused() -> None
 
 
 def test_repeat_block_restarts_trial_order_with_new_attempts() -> None:
-    engine, clock, sink = make_engine()
+    engine, clock, sink = make_engine(practice=False)
     engine.start()
     while not (
         engine.current_action is not None
-        and engine.current_action.context.block_type == "experiment"
+        and engine.current_action.context.stage_type == "experiment"
     ):
         clock.advance(engine.remaining_seconds)
         engine.tick()
@@ -172,7 +184,7 @@ def test_repeat_block_restarts_trial_order_with_new_attempts() -> None:
         event
         for event in sink.events
         if event.event_type == EventType.TRIAL_STARTED
-        and event.block_type == "experiment"
+        and event.stage_type == "experiment"
     ]
     assert len(experiment_starts) == 3
     assert experiment_starts[0].trial_id == experiment_starts[1].trial_id
@@ -191,6 +203,92 @@ def test_abort_closes_active_protocol_scopes() -> None:
     assert terminal_types == [
         EventType.PHASE_ENDED,
         EventType.TRIAL_ENDED,
-        EventType.BLOCK_ENDED,
+        EventType.PRACTICE_ENDED,
         EventType.SESSION_ABORTED,
     ]
+
+
+def test_practice_checkpoint_separates_practice_from_experiment() -> None:
+    engine, clock, sink = make_engine()
+    engine.start()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.state == RunState.AWAITING_EXPERIMENT
+    assert engine.view_state().screen == "practice_complete"
+    assert engine.view_state().block_number is None
+    practice_events = [
+        event for event in sink.events if event.stage_type == "practice"
+    ]
+    assert EventType.PRACTICE_STARTED in [event.event_type for event in practice_events]
+    assert EventType.PRACTICE_ENDED in [event.event_type for event in practice_events]
+    assert all(event.block_id is None for event in practice_events)
+    assert next(
+        event.marker_code
+        for event in practice_events
+        if event.event_type == EventType.PRACTICE_STARTED
+    ) == engine.config.markers.practice_start
+
+    engine.start_experiment()
+    assert engine.state == RunState.RUNNING
+    assert engine.current_action is not None
+    assert engine.current_action.context.stage_type == "experiment"
+    assert engine.current_action.context.block_number == 1
+
+
+def test_checkpoint_can_retry_only_the_last_practice_trial() -> None:
+    engine, clock, sink = make_engine()
+    engine.start()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.plan.practice is not None
+    last_trial_id = engine.plan.practice.trials[-1].trial_id
+    engine.repeat_last_practice_trial()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.state == RunState.AWAITING_EXPERIMENT
+    starts = [
+        event
+        for event in sink.events
+        if event.event_type == EventType.TRIAL_STARTED
+        and event.trial_id == last_trial_id
+    ]
+    assert [event.attempt for event in starts] == [1, 2]
+    assert len([
+        event
+        for event in sink.events
+        if event.event_type == EventType.PRACTICE_STARTED
+    ]) == 2
+
+
+def test_disabled_practice_has_no_checkpoint_or_practice_markers() -> None:
+    engine, _, sink = make_engine(practice=False)
+
+    run_virtual(engine)
+
+    assert engine.state == RunState.COMPLETED
+    assert not {
+        EventType.PRACTICE_STARTED,
+        EventType.PRACTICE_ENDED,
+    } & {event.event_type for event in sink.events}
+
+
+def test_block_repeat_is_rejected_during_practice() -> None:
+    engine, clock, _ = make_engine()
+    engine.start()
+    while (
+        engine.current_action is not None
+        and engine.current_action.context.trial_id is None
+    ):
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.current_action is not None
+    assert engine.current_action.context.stage_type == "practice"
+    with pytest.raises(RuntimeError, match="during practice"):
+        engine.repeat_current_block()

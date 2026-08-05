@@ -12,13 +12,25 @@ from imagined_speech.runtime.clock import VirtualClock
 from imagined_speech.runtime.protocol import FrameLockedProtocolEngine, RunState
 
 
-def make_engine() -> tuple[FrameLockedProtocolEngine, MemoryEventSink, VirtualClock]:
+def make_engine(
+    *, practice: bool = True
+) -> tuple[FrameLockedProtocolEngine, MemoryEventSink, VirtualClock]:
     resolved = load_experiment(default_config_path())
-    plan = compile_session_plan(resolved.config)
+    config = resolved.config
+    if not practice:
+        disabled = config.protocol.practice.model_copy(update={
+            "blocks": 0,
+            "stimulus_ids": (),
+            "repetitions_per_stimulus": 0,
+        })
+        config = config.model_copy(update={
+            "protocol": config.protocol.model_copy(update={"practice": disabled})
+        })
+    plan = compile_session_plan(config)
     clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
     sink = MemoryEventSink()
     engine = FrameLockedProtocolEngine(
-        "session-test", plan, resolved.config, clock, sink
+        "session-test", plan, config, clock, sink
     )
     return engine, sink, clock
 
@@ -107,7 +119,7 @@ def test_pause_requires_neutral_ack_and_resume_requires_new_onset() -> None:
 
 
 def test_refit_from_running_pauses_on_neutral_then_records_adjustment() -> None:
-    engine, sink, _ = make_engine()
+    engine, sink, _ = make_engine(practice=False)
     engine.start()
     acknowledge_onset(engine)
     active = engine.presentation_id
@@ -144,7 +156,9 @@ def test_refit_from_running_pauses_on_neutral_then_records_adjustment() -> None:
 def test_repeat_from_pause_reuses_neutral_frame_and_waits_for_resume(
     repeat_method: str,
 ) -> None:
-    engine, sink, _ = make_engine()
+    engine, sink, _ = make_engine(
+        practice=repeat_method != "repeat_current_block"
+    )
     engine.start()
     acknowledge_onset(engine)
     if engine.current_action is not None and engine.current_action.context.trial_id is None:
@@ -219,7 +233,7 @@ def test_abort_from_pause_reuses_acknowledged_neutral_frame() -> None:
 
 
 def test_chained_repeats_before_resume_reuse_unpresented_attempt_number() -> None:
-    engine, sink, _ = make_engine()
+    engine, sink, _ = make_engine(practice=False)
     engine.start()
     acknowledge_onset(engine)
     successor = engine.successor_view_state()
@@ -258,3 +272,33 @@ def test_chained_repeats_before_resume_reuse_unpresented_attempt_number() -> Non
         if event.event_type == EventType.TRIAL_STARTED
     ]
     assert started_attempts == [1, 2]
+
+
+def test_practice_checkpoint_is_a_frame_acknowledged_presentation() -> None:
+    engine, sink, clock = make_engine()
+    engine.start()
+    acknowledge_onset(engine)
+
+    while engine.state != RunState.AWAITING_EXPERIMENT:
+        assert engine.current_action is not None
+        successor = engine.successor_view_state()
+        assert successor is not None
+        clock.advance(engine.current_action.duration_seconds)
+        engine.acknowledge_frame(
+            previous_presentation_id=engine.presentation_id,
+            presentation_id=successor.presentation_id,
+            revision=engine.presentation_revision,
+            monotonic_seconds=clock.monotonic(),
+            wall_time_utc=clock.wall_time_utc(),
+            neutral=False,
+        )
+
+    checkpoint = engine.view_state()
+    assert checkpoint.screen == "practice_complete"
+    assert checkpoint.headline == "PRACTICE COMPLETE"
+    assert checkpoint.presentation_id == engine.presentation_id
+    assert sink.events[-1].event_type == EventType.PRACTICE_ENDED
+
+    engine.start_experiment()
+    assert engine.state == RunState.AWAITING_PRESENTATION
+    assert engine.view_state().stage_type == "experiment"

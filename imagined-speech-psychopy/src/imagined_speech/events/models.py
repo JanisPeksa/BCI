@@ -25,6 +25,8 @@ class EventType(StrEnum):
     REST_ENDED = "rest_ended"
     BLOCK_STARTED = "block_started"
     BLOCK_ENDED = "block_ended"
+    PRACTICE_STARTED = "practice_started"
+    PRACTICE_ENDED = "practice_ended"
     BREAK_STARTED = "break_started"
     BREAK_ENDED = "break_ended"
     TRIAL_STARTED = "trial_started"
@@ -43,7 +45,7 @@ class EventSource(StrEnum):
 
 
 class ProtocolEvent(StrictModel):
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[3] = 3
     sequence_number: int = Field(ge=1)
     event_type: EventType
     marker_code: int = Field(gt=0)
@@ -52,8 +54,8 @@ class ProtocolEvent(StrictModel):
     source: EventSource
     session_id: str
     plan_id: str
+    stage_type: Literal["practice", "experiment"] | None = None
     block_id: str | None = None
-    block_type: str | None = None
     block_number: int | None = None
     trial_id: str | None = None
     trial_number: int | None = None

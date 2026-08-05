@@ -5,8 +5,8 @@
 Configuration describes experimental intent: profile, stimuli, repetitions,
 durations, presentation, marker catalog, device profile, QC settings, and
 output location. A `SessionPlan` describes one exact execution: ordered rests,
-practice/experiment blocks, breaks, trials, phase steps, durations, and stable
-identifiers.
+an optional practice stage, experiment blocks, breaks, trials, phase steps,
+durations, and stable identifiers.
 
 Compiling intent before runtime provides two useful guarantees:
 
@@ -34,14 +34,14 @@ flowchart LR
 
 All schemas inherit `StrictModel`, which sets Pydantic to reject unknown fields
 and prevent model attribute reassignment. This catches misspelled YAML keys and
-discourages runtime mutation. Models carry `schema_version: 1` at the top-level
-experiment/device/session contracts.
+discourages runtime mutation. Live experiment and session contracts use schema
+version 3; device profiles remain version 1.
 
 `ExperimentConfig` groups:
 
 - identity: `experiment_id`, title, schema version;
-- protocol: an explicit ordered phase sequence, random seed, block/repetition
-  design, practice, rests, and breaks;
+- protocol: an explicit ordered phase sequence, nested experiment/practice
+  designs, random seed, rests, and breaks;
 - phase definitions: positive duration and instruction for each phase used by
   the protocol sequence;
 - stimuli: stable ID, display label, and optional image/audio paths;
@@ -83,8 +83,8 @@ all configurations to use `window_mode`.
 Validation checks more than individual value types:
 
 - stimulus and device channel IDs/labels must be unique;
-- practice stimulus IDs must exist and practice stimuli/repetition count must
-  be enabled together;
+- practice `blocks` must be zero or one; zero requires no stimuli/repetitions,
+  while one requires known unique stimuli and a positive repetition count;
 - the phase mapping must exactly match the phases named by `protocol.sequence`;
 - recorded trials must divide evenly across blocks;
 - marker codes must be positive and fixed codes must not collide;
@@ -131,7 +131,8 @@ behavior changing with the process working directory.
    repetitions go to every block; any remainder is rotated across blocks from
    a seed-derived starting position.
 6. Shuffle each block with its own `<seed>:block:<number>` namespace.
-7. Create stable block, trial, and phase-step IDs and copy display labels,
+7. Create a first-class `PracticePlan` when enabled plus numbered
+   `ExperimentBlockPlan` items, stable trial/phase-step IDs, and display labels,
    instructions, and durations into the plan.
 8. Insert configured inter-block breaks and optional final rest.
 
@@ -141,10 +142,10 @@ configuration and seed produce identical plan JSON.
 
 ## Balance and numbering
 
-Experiment trial numbers are global across experiment blocks. Practice uses a
-separate block with number `0` and practice trial numbering. Within each block,
-`block_trial_number` begins at one. The plan exposes derived counts and total
-duration for preview and validation.
+Experiment trial numbers are global across experiment blocks. Practice has its
+own trial numbering and no block number or block count. `group_trial_number`
+begins at one within practice and within each experiment block. The plan
+exposes derived counts and total duration for preview and validation.
 
 The compiler balances repetitions over blocks but does not implement more
 advanced constraints such as “no adjacent identical stimulus” or phonetic

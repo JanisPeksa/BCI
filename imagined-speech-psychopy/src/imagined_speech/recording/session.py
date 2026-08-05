@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import csv
+from copy import deepcopy
 import json
 import re
 import threading
@@ -25,8 +26,8 @@ from imagined_speech.runtime.commands import (
     OperatorCommandStatus,
 )
 from imagined_speech.planning import (
-    BlockPlan,
     BreakPlan,
+    PracticePlan,
     RestPlan,
     SessionPlan,
     config_fingerprint,
@@ -108,6 +109,48 @@ def _config_mapping_fingerprint(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _validate_legacy_schema_two_config(value: dict[str, Any]) -> None:
+    normalized = deepcopy(value)
+    normalized["schema_version"] = 3
+    protocol = normalized["protocol"]
+    stimulus_ids = protocol.pop("practice_stimulus_ids")
+    practice_repetitions = protocol.pop("practice_repetitions_per_stimulus")
+    protocol["experiment"] = {
+        "blocks": protocol.pop("blocks"),
+        "repetitions_per_stimulus": protocol.pop("repetitions_per_stimulus"),
+    }
+    protocol["practice"] = {
+        "blocks": int(bool(stimulus_ids and practice_repetitions)),
+        "stimulus_ids": stimulus_ids,
+        "repetitions_per_stimulus": practice_repetitions,
+    }
+    markers = normalized.setdefault("markers", {})
+    if "practice_start" not in markers or "practice_end" not in markers:
+        used_codes = {
+            value
+            for marker_value in markers.values()
+            for value in (
+                marker_value.values()
+                if isinstance(marker_value, dict)
+                else (marker_value,)
+            )
+            if isinstance(value, int)
+        }
+        stimulus_base = int(markers.get("stimulus_base", 1000))
+        used_codes.update(
+            range(stimulus_base, stimulus_base + len(normalized["stimuli"]))
+        )
+        candidate = max(used_codes, default=0) + 1
+        for key in ("practice_start", "practice_end"):
+            if key in markers:
+                continue
+            while candidate in used_codes:
+                candidate += 1
+            markers[key] = candidate
+            used_codes.add(candidate)
+    ExperimentConfig.model_validate(normalized)
+
+
 class SessionWriter(EventSink):
     """Writes events immediately and finalizes a versioned session package."""
 
@@ -170,7 +213,7 @@ class SessionWriter(EventSink):
             self.path / "presentation-timing.jsonl"
         ).open("a", encoding="utf-8", newline="\n")
         self._presentation_metadata: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "driver": "pending",
         }
         _write_bytes_atomic(
@@ -202,7 +245,7 @@ class SessionWriter(EventSink):
 
     def _manifest(self, status: str) -> dict[str, Any]:
         manifest: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "software_version": __version__,
             "session_id": self.session_id,
             "participant_id": self.participant_id,
@@ -258,7 +301,7 @@ class SessionWriter(EventSink):
             )
 
     def record_presentation_timing(self, value: dict[str, Any]) -> None:
-        record = {"schema_version": 2, **value}
+        record = {"schema_version": 3, **value}
         with self._lock:
             if self._closed:
                 raise RuntimeError("cannot write to a finalized session")
@@ -298,6 +341,7 @@ class SessionWriter(EventSink):
         state_before: str,
         resulting_state: str,
         note: str | None = None,
+        stage_type: str | None = None,
         block_id: str | None = None,
         trial_id: str | None = None,
         attempt: int | None = None,
@@ -319,6 +363,7 @@ class SessionWriter(EventSink):
                 state_before=state_before,
                 resulting_state=resulting_state,
                 session_id=self.session_id,
+                stage_type=stage_type,
                 block_id=block_id,
                 trial_id=trial_id,
                 attempt=attempt,
@@ -371,6 +416,70 @@ def _read_yaml(path: Path) -> Any:
         raise SessionValidationError(f"cannot read valid YAML from {path.name}: {exc}") from exc
 
 
+def _normalize_plan(value: Any) -> SessionPlan:
+    if not isinstance(value, dict):
+        raise SessionValidationError("session plan must be a JSON object")
+    version = value.get("schema_version")
+    if version == 3:
+        return SessionPlan.model_validate(value)
+    if version not in {1, 2}:
+        raise SessionValidationError("session plan schema is unsupported")
+
+    normalized = dict(value)
+    normalized["schema_version"] = 3
+    items: list[dict[str, Any]] = []
+    for raw_item in value.get("items", []):
+        item = dict(raw_item)
+        if item.get("kind") != "block":
+            items.append(item)
+            continue
+        trials = []
+        for raw_trial in item.get("trials", []):
+            trial = dict(raw_trial)
+            trial.pop("block_id", None)
+            trial["group_trial_number"] = trial.pop("block_trial_number")
+            trials.append(trial)
+        if item.get("block_type") == "practice":
+            items.append({
+                "kind": "practice",
+                "practice_id": item["block_id"],
+                "trials": trials,
+            })
+        else:
+            items.append({
+                "kind": "experiment_block",
+                "block_id": item["block_id"],
+                "block_number": item["block_number"],
+                "block_count": item["block_count"],
+                "trials": trials,
+            })
+    normalized["items"] = items
+    return SessionPlan.model_validate(normalized)
+
+
+def _normalize_event_value(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("event must be a JSON object")
+    normalized = dict(value)
+    version = normalized.get("schema_version")
+    if version == 3:
+        return normalized
+    if version not in {1, 2}:
+        raise ValueError("event schema is unsupported")
+    stage_type = normalized.pop("block_type", None)
+    normalized["schema_version"] = 3
+    normalized["stage_type"] = stage_type
+    if stage_type == "practice":
+        event_type = normalized.get("event_type")
+        if event_type == EventType.BLOCK_STARTED.value:
+            normalized["event_type"] = EventType.PRACTICE_STARTED.value
+        elif event_type == EventType.BLOCK_ENDED.value:
+            normalized["event_type"] = EventType.PRACTICE_ENDED.value
+        normalized["block_id"] = None
+        normalized["block_number"] = None
+    return normalized
+
+
 def _load_events(path: Path) -> list[ProtocolEvent]:
     events: list[ProtocolEvent] = []
     try:
@@ -381,8 +490,10 @@ def _load_events(path: Path) -> list[ProtocolEvent]:
         if not line.strip():
             continue
         try:
-            events.append(ProtocolEvent.model_validate_json(line))
-        except ValidationError as exc:
+            events.append(
+                ProtocolEvent.model_validate(_normalize_event_value(json.loads(line)))
+            )
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             raise SessionValidationError(
                 f"invalid event at {path.name}:{line_number}: {exc}"
             ) from exc
@@ -421,21 +532,35 @@ def _validate_event_structure(
             return 0, 0
         raise SessionValidationError("event log is empty")
 
-    block_ids = {block.block_id for block in plan.blocks}
-    trials_by_block = {
-        block.block_id: tuple(trial.trial_id for trial in block.trials)
-        for block in plan.blocks
+    practice_id = plan.practice.practice_id if plan.practice is not None else None
+    block_ids = {block.block_id for block in plan.experiment_blocks}
+    trials_by_group = {
+        (
+            group.practice_id
+            if isinstance(group, PracticePlan)
+            else group.block_id
+        ): tuple(trial.trial_id for trial in group.trials)
+        for group in plan.trial_groups
     }
-    trial_ids = {trial_id for trials in trials_by_block.values() for trial_id in trials}
+    stage_by_group = {
+        group_id: "practice" if group_id == practice_id else "experiment"
+        for group_id in trials_by_group
+    }
+    group_by_trial = {
+        trial_id: group_id
+        for group_id, trials in trials_by_group.items()
+        for trial_id in trials
+    }
+    trial_ids = set(group_by_trial)
     phases_by_trial = {
         trial.trial_id: tuple(phase.step_id for phase in trial.phases)
-        for block in plan.blocks
-        for trial in block.trials
+        for group in plan.trial_groups
+        for trial in group.trials
     }
     phase_types = {
         phase.step_id: phase.phase
-        for block in plan.blocks
-        for trial in block.trials
+        for group in plan.trial_groups
+        for trial in group.trials
         for phase in trial.phases
     }
     phase_ids = set(phase_types)
@@ -448,12 +573,14 @@ def _validate_event_structure(
             if isinstance(item, RestPlan)
             else item.break_id
             if isinstance(item, BreakPlan)
+            else item.practice_id
+            if isinstance(item, PracticePlan)
             else item.block_id,
         )
         for item in plan.items
     ]
 
-    active_block: str | None = None
+    active_group: str | None = None
     active_trial: str | None = None
     active_attempt: int | None = None
     active_phase: str | None = None
@@ -464,10 +591,11 @@ def _validate_event_structure(
     ended_trials: set[str] = set()
     ended_phases: set[str] = set()
     item_position = 0
-    trial_positions = {block_id: 0 for block_id in block_ids}
+    trial_positions = {group_id: 0 for group_id in trials_by_group}
     phase_positions: dict[tuple[str, int], int] = {}
     latest_attempt = {trial_id: 0 for trial_id in trial_ids}
     stimulus_seen = False
+    practice_checkpoint = False
 
     def expect_item(kind: str, identifier: str | None) -> None:
         if item_position >= len(item_order) or item_order[item_position] != (
@@ -493,7 +621,7 @@ def _validate_event_structure(
             if expected_sequence != 1:
                 raise SessionValidationError("session_started must be the first event")
         elif event_type == EventType.REST_STARTED:
-            if active_block or active_break or active_rest:
+            if active_group or active_break or active_rest:
                 raise SessionValidationError("rest started while another session scope was active")
             if event.step_id not in rest_ids:
                 raise SessionValidationError("rest event references an unknown plan item")
@@ -505,19 +633,41 @@ def _validate_event_structure(
             active_rest = None
             item_position += 1
         elif event_type == EventType.BLOCK_STARTED:
-            if active_block or active_break or active_rest:
+            if active_group or active_break or active_rest:
                 raise SessionValidationError("block started while another scope was active")
             if event.block_id not in block_ids:
                 raise SessionValidationError("block event references an unknown block")
-            expect_item("block", event.block_id)
-            active_block = event.block_id
+            expect_item("experiment_block", event.block_id)
+            active_group = event.block_id
+            practice_checkpoint = False
         elif event_type == EventType.BLOCK_ENDED:
-            if event.block_id != active_block or active_trial:
+            if event.block_id != active_group or active_trial:
                 raise SessionValidationError("block end does not match active block")
-            active_block = None
+            active_group = None
             item_position += 1
+        elif event_type == EventType.PRACTICE_STARTED:
+            if active_group or active_break or active_rest or practice_id is None:
+                raise SessionValidationError(
+                    "practice started while another scope was active or practice is disabled"
+                )
+            retry = bool(event.payload.get("retry"))
+            if retry:
+                if not practice_checkpoint:
+                    raise SessionValidationError("practice retry started outside the checkpoint")
+                trial_positions[practice_id] = len(trials_by_group[practice_id]) - 1
+            else:
+                expect_item("practice", practice_id)
+            active_group = practice_id
+            practice_checkpoint = False
+        elif event_type == EventType.PRACTICE_ENDED:
+            if active_group != practice_id or active_trial:
+                raise SessionValidationError("practice end does not match active practice")
+            active_group = None
+            practice_checkpoint = True
+            if not event.payload.get("retry"):
+                item_position += 1
         elif event_type == EventType.BREAK_STARTED:
-            if active_block or active_break or active_rest:
+            if active_group or active_break or active_rest:
                 raise SessionValidationError("break started while another scope was active")
             if event.step_id not in break_ids:
                 raise SessionValidationError("break event references an unknown plan item")
@@ -529,12 +679,16 @@ def _validate_event_structure(
             active_break = None
             item_position += 1
         elif event_type == EventType.TRIAL_STARTED:
-            if not active_block or active_trial:
-                raise SessionValidationError("trial started outside a block")
+            if not active_group or active_trial:
+                raise SessionValidationError("trial started outside a trial group")
             if event.trial_id not in trial_ids:
                 raise SessionValidationError("trial event references an unknown trial")
-            expected_trials = trials_by_block[active_block]
-            position = trial_positions[active_block]
+            if group_by_trial[event.trial_id] != active_group:
+                raise SessionValidationError("trial belongs to another trial group")
+            if event.stage_type != stage_by_group[active_group]:
+                raise SessionValidationError("trial stage does not match the session plan")
+            expected_trials = trials_by_group[active_group]
+            position = trial_positions[active_group]
             if position >= len(expected_trials) or event.trial_id != expected_trials[position]:
                 raise SessionValidationError("trial is out of plan order or in the wrong block")
             if event.attempt != latest_attempt[event.trial_id] + 1:
@@ -551,11 +705,11 @@ def _validate_event_structure(
             ):
                 raise SessionValidationError("trial end does not match active trial")
             assert event.trial_id is not None
-            assert active_block is not None
+            assert active_group is not None
             outcome = event.payload.get("outcome", "completed")
             if outcome == "completed":
                 ended_trials.add(event.trial_id)
-                trial_positions[active_block] += 1
+                trial_positions[active_group] += 1
             elif outcome not in {"superseded", "aborted", "failed"}:
                 raise SessionValidationError(f"unknown trial outcome: {outcome}")
             active_trial = None
@@ -597,25 +751,36 @@ def _validate_event_structure(
                 raise SessionValidationError(f"unknown phase outcome: {outcome}")
             active_phase = None
         elif event_type == EventType.TRIAL_REPEATED:
-            if not active_block or active_trial or active_phase:
-                raise SessionValidationError("trial repeat occurred outside a recoverable block")
-            expected_trials = trials_by_block[active_block]
-            position = trial_positions[active_block]
+            checkpoint_retry = bool(event.payload.get("checkpoint_retry"))
+            if checkpoint_retry:
+                if not practice_checkpoint or practice_id is None:
+                    raise SessionValidationError(
+                        "practice trial retry occurred outside the checkpoint"
+                    )
+                expected_trials = trials_by_group[practice_id]
+                position = len(expected_trials) - 1
+            else:
+                if not active_group or active_trial or active_phase:
+                    raise SessionValidationError(
+                        "trial repeat occurred outside a recoverable trial group"
+                    )
+                expected_trials = trials_by_group[active_group]
+                position = trial_positions[active_group]
             if position >= len(expected_trials) or event.trial_id != expected_trials[position]:
                 raise SessionValidationError("trial repeat does not match the expected trial")
             assert event.trial_id is not None
             ended_trials.discard(event.trial_id)
             ended_phases.difference_update(phases_by_trial[event.trial_id])
         elif event_type == EventType.BLOCK_REPEATED:
-            if event.block_id != active_block or active_trial or active_phase:
+            if event.block_id != active_group or active_trial or active_phase:
                 raise SessionValidationError("block repeat does not match the active block")
-            assert active_block is not None
-            trial_positions[active_block] = 0
-            for trial_id in trials_by_block[active_block]:
+            assert active_group is not None
+            trial_positions[active_group] = 0
+            for trial_id in trials_by_group[active_group]:
                 ended_trials.discard(trial_id)
                 ended_phases.difference_update(phases_by_trial[trial_id])
         elif event_type == EventType.REFIT_RECORDED:
-            if not (active_block or active_rest or active_break):
+            if not (active_group or active_rest or active_break or practice_checkpoint):
                 raise SessionValidationError("refit was recorded outside an active session scope")
         elif event_type == EventType.SESSION_PAUSED:
             if paused:
@@ -638,7 +803,7 @@ def _validate_event_structure(
             f"manifest status {status} does not match terminal event"
         )
     if status == "complete":
-        if active_block or active_trial or active_phase or active_rest or active_break or paused:
+        if active_group or active_trial or active_phase or active_rest or active_break or paused:
             raise SessionValidationError("complete session has unclosed event scopes")
         if item_position != len(item_order):
             raise SessionValidationError("complete session does not contain every plan item")
@@ -667,12 +832,12 @@ def validate_session(path: str | Path) -> SessionValidationReport:
         raise SessionValidationError("missing session artifacts: " + ", ".join(missing))
 
     manifest = _read_json(session_path / "manifest.json")
-    if not isinstance(manifest, dict) or manifest.get("schema_version") not in {1, 2}:
+    if not isinstance(manifest, dict) or manifest.get("schema_version") not in {1, 2, 3}:
         raise SessionValidationError("manifest schema version is unsupported")
     status = manifest.get("status")
     if status not in {"in_progress", "incomplete", "complete", "aborted", "failed"}:
         raise SessionValidationError(f"unknown manifest status: {status}")
-    if manifest.get("schema_version") == 2:
+    if manifest.get("schema_version") in {2, 3}:
         presentation_files = (
             "presentation-metadata.json",
             "presentation-timing.jsonl",
@@ -685,7 +850,7 @@ def validate_session(path: str | Path) -> SessionValidationReport:
                 "missing presentation artifacts: " + ", ".join(missing_presentation)
             )
         metadata = _read_json(session_path / "presentation-metadata.json")
-        if not isinstance(metadata, dict) or metadata.get("schema_version") not in {1, 2}:
+        if not isinstance(metadata, dict) or metadata.get("schema_version") not in {1, 2, 3}:
             raise SessionValidationError("presentation metadata schema is unsupported")
         for line_number, line in enumerate(
             (session_path / "presentation-timing.jsonl").read_text(
@@ -703,15 +868,18 @@ def validate_session(path: str | Path) -> SessionValidationReport:
     warnings = _verify_checksums(session_path, required=status != "in_progress")
     config_data = _read_yaml(session_path / "experiment-config.yaml")
     try:
-        if config_data.get("schema_version") == 2:
+        if config_data.get("schema_version") == 3:
             config = ExperimentConfig.model_validate(config_data)
             snapshot_hash = config_fingerprint(config)
+        elif config_data.get("schema_version") == 2:
+            _validate_legacy_schema_two_config(config_data)
+            snapshot_hash = _config_mapping_fingerprint(config_data)
         elif config_data.get("schema_version") == 1:
             snapshot_hash = _config_mapping_fingerprint(config_data)
         else:
             raise SessionValidationError("experiment snapshot schema is unsupported")
         DeviceProfile.model_validate(_read_yaml(session_path / "device-profile.yaml"))
-        plan = SessionPlan.model_validate(_read_json(session_path / "session-plan.json"))
+        plan = _normalize_plan(_read_json(session_path / "session-plan.json"))
     except ValidationError as exc:
         raise SessionValidationError(f"invalid session snapshot: {exc}") from exc
 
@@ -764,14 +932,17 @@ def _validate_operator_actions(
             ) from exc
         try:
             if value.get("record_type") == "operator_command":
-                record = OperatorCommandRecord.model_validate(value)
+                normalized_record = dict(value)
+                if normalized_record.get("schema_version") in {1, 2}:
+                    normalized_record["schema_version"] = 3
+                record = OperatorCommandRecord.model_validate(normalized_record)
                 command_count += 1
                 if record.sequence_number != command_count:
                     raise SessionValidationError("operator command sequence is discontinuous")
                 if record.session_id != session_id:
                     raise SessionValidationError("operator command references another session")
             else:
-                event = ProtocolEvent.model_validate(value)
+                event = ProtocolEvent.model_validate(_normalize_event_value(value))
                 authoritative = events_by_sequence.get(event.sequence_number)
                 if authoritative is None or event != authoritative:
                     raise SessionValidationError(

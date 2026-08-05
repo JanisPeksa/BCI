@@ -15,6 +15,8 @@ class OperatorCommand(StrEnum):
     RESUME = "resume"
     REPEAT_TRIAL = "repeat_trial"
     REPEAT_BLOCK = "repeat_block"
+    START_EXPERIMENT = "start_experiment"
+    REPEAT_LAST_PRACTICE_TRIAL = "repeat_last_practice_trial"
     REFIT = "refit"
     ABORT = "abort"
 
@@ -25,7 +27,7 @@ class OperatorCommandStatus(StrEnum):
 
 
 class OperatorCommandRecord(StrictModel):
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[3] = 3
     record_type: Literal["operator_command"] = "operator_command"
     sequence_number: int
     command: OperatorCommand
@@ -38,6 +40,7 @@ class OperatorCommandRecord(StrictModel):
     state_before: str
     resulting_state: str
     session_id: str
+    stage_type: Literal["practice", "experiment"] | None = None
     block_id: str | None = None
     trial_id: str | None = None
     attempt: int | None = None

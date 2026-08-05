@@ -6,14 +6,13 @@ import hashlib
 import json
 import random
 from collections import Counter
-from typing import Literal
-
 from imagined_speech.config import ExperimentConfig, Phase, StimulusConfig
 from imagined_speech.planning.models import (
-    BlockPlan,
     BreakPlan,
+    ExperimentBlockPlan,
     PhaseStep,
     PlanItem,
+    PracticePlan,
     RestPlan,
     SessionPlan,
     TrialPlan,
@@ -51,16 +50,18 @@ def _practice_stimuli(config: ExperimentConfig) -> list[StimulusConfig]:
     by_id = {stimulus.id: stimulus for stimulus in config.stimuli}
     stimuli = [
         by_id[stimulus_id]
-        for stimulus_id in config.protocol.practice_stimulus_ids
-        for _ in range(config.protocol.practice_repetitions_per_stimulus)
+        for stimulus_id in config.protocol.practice.stimulus_ids
+        for _ in range(config.protocol.practice.repetitions_per_stimulus)
     ]
     random.Random(f"{config.random_seed}:practice").shuffle(stimuli)
     return stimuli
 
 
 def _experiment_stimuli_by_block(config: ExperimentConfig) -> list[list[StimulusConfig]]:
-    block_count = config.protocol.blocks
-    base, remainder = divmod(config.protocol.repetitions_per_stimulus, block_count)
+    block_count = config.protocol.experiment.blocks
+    base, remainder = divmod(
+        config.protocol.experiment.repetitions_per_stimulus, block_count
+    )
     blocks: list[list[StimulusConfig]] = [[] for _ in range(block_count)]
     for stimulus in config.stimuli:
         for block in blocks:
@@ -75,35 +76,26 @@ def _experiment_stimuli_by_block(config: ExperimentConfig) -> list[list[Stimulus
     return blocks
 
 
-def _make_block(
+def _make_trials(
     config: ExperimentConfig,
-    block_id: str,
-    block_type: Literal["practice", "experiment"],
-    block_number: int,
+    group_id: str,
     stimuli: list[StimulusConfig],
     first_trial_number: int,
-) -> BlockPlan:
+) -> tuple[TrialPlan, ...]:
     trials: list[TrialPlan] = []
-    for block_trial_number, stimulus in enumerate(stimuli, start=1):
-        trial_number = first_trial_number + block_trial_number - 1
-        trial_id = f"{block_id}-trial-{block_trial_number:03d}"
+    for group_trial_number, stimulus in enumerate(stimuli, start=1):
+        trial_number = first_trial_number + group_trial_number - 1
+        trial_id = f"{group_id}-trial-{group_trial_number:03d}"
         trials.append(TrialPlan(
             trial_id=trial_id,
-            block_id=block_id,
             trial_number=trial_number,
-            block_trial_number=block_trial_number,
+            group_trial_number=group_trial_number,
             stimulus_id=stimulus.id,
             stimulus_label=stimulus.label,
             phases=_phase_steps(config, trial_id),
             post_trial_seconds=config.protocol.post_trial_seconds,
         ))
-    return BlockPlan(
-        block_id=block_id,
-        block_type=block_type,
-        block_number=block_number,
-        block_count=config.protocol.blocks,
-        trials=tuple(trials),
-    )
+    return tuple(trials)
 
 
 def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
@@ -117,22 +109,27 @@ def compile_session_plan(config: ExperimentConfig) -> SessionPlan:
         ))
     practice_stimuli = _practice_stimuli(config)
     if practice_stimuli:
-        items.append(_make_block(
-            config, "practice-block", "practice", 0, practice_stimuli, 1
+        items.append(PracticePlan(
+            practice_id="practice",
+            trials=_make_trials(config, "practice", practice_stimuli, 1),
         ))
     first_trial_number = 1
     for block_number, stimuli in enumerate(_experiment_stimuli_by_block(config), start=1):
-        block = _make_block(
-            config,
-            f"experiment-block-{block_number:03d}",
-            "experiment",
-            block_number,
-            stimuli,
-            first_trial_number,
+        block_id = f"experiment-block-{block_number:03d}"
+        block = ExperimentBlockPlan(
+            block_id=block_id,
+            block_number=block_number,
+            block_count=config.protocol.experiment.blocks,
+            trials=_make_trials(
+                config, block_id, stimuli, first_trial_number
+            ),
         )
         items.append(block)
         first_trial_number += len(stimuli)
-        if block_number < config.protocol.blocks and config.protocol.inter_block_break_seconds > 0:
+        if (
+            block_number < config.protocol.experiment.blocks
+            and config.protocol.inter_block_break_seconds > 0
+        ):
             items.append(BreakPlan(
                 break_id=f"break-after-{block_number:03d}",
                 after_block=block_number,

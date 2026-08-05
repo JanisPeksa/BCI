@@ -91,8 +91,8 @@ fields must use recognizable names or extend the redaction policy.
 2. Parse the manifest and accept only known schema/status values.
 3. Verify final checksums (or warn when an `in_progress` package legitimately
    lacks them).
-4. Parse experiment/device snapshots and `SessionPlan` through the same typed
-   schemas used by the runtime.
+4. Parse schema-3 experiment/device snapshots and `SessionPlan` through the
+   runtime schemas; normalize historical schema-1/2 plans and events in memory.
 5. Recompute the experiment fingerprint and compare it with plan and manifest;
    compare the manifest plan ID with the snapshot.
 6. Parse every event as `ProtocolEvent`, enforce sequence/session identity, and

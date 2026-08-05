@@ -56,7 +56,7 @@ def _state() -> OperatorStatePayload:
             "stimulus_label": "Left",
             "remaining_seconds": 1.25,
             "duration_seconds": 2.0,
-            "block_type": "experiment",
+            "stage_type": "experiment",
             "block_number": 1,
             "block_count": 2,
             "trial_number": 3,
@@ -192,6 +192,7 @@ def test_protocol_scene_and_modular_widgets_render_typed_live_state() -> None:
     app.processEvents()
 
     assert "2500 samples" in page.recording_label.text()
+    assert "Experiment block 1/2" in page.progress_label.text()
     assert "trial 3/10" in page.progress_label.text()
     assert page.output_label.text().endswith("sessions/test")
     registry = create_monitoring_registry()
@@ -202,6 +203,56 @@ def test_protocol_scene_and_modular_widgets_render_typed_live_state() -> None:
     health = page.workspace.widgets_for("acquisition_health")
     assert len(health) == 1
     assert "1.00 MiB" in health[0].label.text()
+
+
+def test_protocol_scene_renders_practice_without_experiment_block_numbers() -> None:
+    app = _app()
+    page = ProtocolControlPage()
+    state = _state()
+    practice_view = state.view_state.model_copy(update={
+        "stage_type": "practice",
+        "block_number": None,
+        "block_count": None,
+        "trial_number": 1,
+        "trial_count": 4,
+    })
+
+    page.render(state.model_copy(update={"view_state": practice_view}))
+    app.processEvents()
+
+    assert page.progress_label.text() == "Progress: Practice - trial 1/4"
+    assert "0/" not in page.progress_label.text()
+
+
+def test_protocol_scene_exposes_practice_checkpoint_actions() -> None:
+    app = _app()
+    page = ProtocolControlPage()
+    state = _state()
+    checkpoint_view = state.view_state.model_copy(update={
+        "run_state": "awaiting_experiment",
+        "screen": "practice_complete",
+        "headline": "PRACTICE COMPLETE",
+        "instruction": "Please wait for the researcher.",
+        "stage_type": "practice",
+        "block_number": None,
+        "block_count": None,
+        "trial_number": None,
+        "trial_count": 4,
+    })
+    checkpoint_state = state.model_copy(update={
+        "engine_state": "awaiting_experiment",
+        "view_state": checkpoint_view,
+    })
+
+    page.render(checkpoint_state)
+    page.set_controls(controls_for("running", "awaiting_experiment"))
+    app.processEvents()
+
+    assert page.progress_label.text() == (
+        "Progress: Practice complete - awaiting operator"
+    )
+    assert page.command_buttons["start_protocol"].text() == "Start experiment"
+    assert page.command_buttons["repeat_last_practice_trial"].isEnabled()
 
 
 def test_protocol_scene_displays_nonfatal_timing_warning() -> None:

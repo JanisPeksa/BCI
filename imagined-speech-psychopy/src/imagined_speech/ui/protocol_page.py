@@ -68,6 +68,10 @@ class ProtocolControlPage(QWidget):
             (OperatorCommand.RESUME, "Resume"),
             (OperatorCommand.REPEAT_TRIAL, "Repeat trial"),
             (OperatorCommand.REPEAT_BLOCK, "Repeat block"),
+            (
+                OperatorCommand.REPEAT_LAST_PRACTICE_TRIAL,
+                "Repeat last practice trial",
+            ),
             (OperatorCommand.REFIT, "Electrode adjustment..."),
             (OperatorCommand.ABORT, "Abort"),
         ):
@@ -159,11 +163,19 @@ class ProtocolControlPage(QWidget):
             self.phase_label.setText(
                 f"Phase: {view.screen} - {view.remaining_seconds:.1f}s remaining"
             )
-        if view.trial_number is None:
+        if view.screen == "practice_complete":
+            self.progress_label.setText(
+                "Progress: Practice complete - awaiting operator"
+            )
+        elif view.trial_number is None:
             self.progress_label.setText("Progress: no active trial")
+        elif view.stage_type == "practice":
+            self.progress_label.setText(
+                f"Progress: Practice - trial {view.trial_number}/{view.trial_count}"
+            )
         else:
             self.progress_label.setText(
-                f"Progress: {view.block_type} block {view.block_number}/{view.block_count}, "
+                f"Progress: Experiment block {view.block_number}/{view.block_count}, "
                 f"trial {view.trial_number}/{view.trial_count}"
             )
         self.output_label.setText(f"Output: {state.session_path}")
@@ -195,17 +207,28 @@ class ProtocolControlPage(QWidget):
         elif state and state.subject_ui_initializing:
             self.primary_action = ""
             primary.setText("Initializing subject UI...")
+        elif state and state.start_experiment:
+            self.primary_action = OperatorCommand.START_EXPERIMENT.value
+            primary.setText("Start experiment")
         else:
             self.primary_action = OperatorCommand.START_PROTOCOL.value
             primary.setText("Start protocol")
         values = {
             "start_protocol": bool(
-                state and (state.init_subject_ui or state.start_protocol)
+                state
+                and (
+                    state.init_subject_ui
+                    or state.start_protocol
+                    or state.start_experiment
+                )
             ),
             "pause": bool(state and state.pause),
             "resume": bool(state and state.resume),
-            "repeat_trial": bool(state and state.repeat),
-            "repeat_block": bool(state and state.repeat),
+            "repeat_trial": bool(state and state.repeat_trial),
+            "repeat_block": bool(state and state.repeat_block),
+            "repeat_last_practice_trial": bool(
+                state and state.repeat_last_practice_trial
+            ),
             "refit": bool(state and state.refit),
             "abort": bool(state and state.abort),
         }
@@ -219,6 +242,9 @@ class ProtocolControlPage(QWidget):
             "resume": "Available while the protocol is paused.",
             "repeat_trial": "Available during an active trial.",
             "repeat_block": "Available during an active trial.",
+            "repeat_last_practice_trial": (
+                "Available after the practice stage is complete."
+            ),
             "refit": "Available while the protocol is running or paused.",
             "abort": "Available while the session is active.",
         }
@@ -235,6 +261,8 @@ class ProtocolControlPage(QWidget):
             self.initSubjectRequested.emit()
         elif self.primary_action == OperatorCommand.START_PROTOCOL.value:
             self.commandRequested.emit(OperatorCommand.START_PROTOCOL.value)
+        elif self.primary_action == OperatorCommand.START_EXPERIMENT.value:
+            self.commandRequested.emit(OperatorCommand.START_EXPERIMENT.value)
 
     def show_alert(self, text: str, *, error: bool) -> None:
         self.alert_label.setText(text)

@@ -50,7 +50,7 @@ def _state(
             "stimulus_label": "Left",
             "remaining_seconds": 1.0,
             "duration_seconds": 2.0,
-            "block_type": "experiment",
+            "stage_type": "experiment",
             "block_number": 1,
             "block_count": 1,
             "trial_number": 1,

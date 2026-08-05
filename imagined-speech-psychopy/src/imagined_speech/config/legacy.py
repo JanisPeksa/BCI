@@ -9,9 +9,10 @@ from imagined_speech.config.models import ConfigurationError
 
 
 def reject_legacy_live_configuration(data: dict[str, Any], path: Path) -> None:
-    if data.get("schema_version") == 1:
+    version = data.get("schema_version")
+    if version in {1, 2}:
         raise ConfigurationError(
-            f"{path} uses experiment schema version 1 with the retired Qt-only "
-            "subject presentation; migrate to schema_version: 2 and add an explicit "
-            "presentation.psychopy block"
+            f"{path} uses retired experiment schema version {version}; migrate to "
+            "schema_version: 3 with explicit protocol.experiment and "
+            "protocol.practice sections"
         )

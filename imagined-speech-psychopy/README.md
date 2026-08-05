@@ -84,10 +84,10 @@ imagined-speech-psychopy validate-session sessions/<session-directory>
 imagined-speech-psychopy publish-lsl-synthetic
 ```
 
-The bundled schema-2 configurations live under
-`src/imagined_speech/resources/configs`. Live commands reject schema-1
+The bundled schema-3 configurations live under
+`src/imagined_speech/resources/configs`. Live commands reject schema-1/2
 configurations with a targeted migration error. `validate-session` continues
-to reconstruct historical schema-1 packages.
+to reconstruct historical schema-1/2 packages.
 
 `cyton-four-phoneme.yaml` is the short hardware and protocol shakedown for the
 8-channel Cyton. It presents `/p/`, `/m/`, `/i/`, and `/u/` twice each across
@@ -104,7 +104,8 @@ automatically after acquisition readiness and timing preflight.
 
 ## Configuration and artifacts
 
-Every live experiment requires `schema_version: 2` and an explicit
+Every live experiment requires `schema_version: 3`, explicit
+`protocol.experiment` and `protocol.practice` sections, and an explicit
 `presentation.psychopy` block. It defines monitor/window behavior, text and
 asset rendering, frame preflight and drop thresholds, IPC timing tolerance,
 acknowledgement timeout, and PTB audio settings. Device profiles remain schema
@@ -125,7 +126,7 @@ calibration is loaded when it exists; otherwise presentation falls back to
 session metadata. Create a calibrated PsychoPy monitor profile for hardware
 acceptance and production data collection.
 
-Schema-2 session packages add:
+Schema-3 session packages include:
 
 - `presentation-metadata.json` for resolved settings, preflight, audio, and
   initial/final clock mappings;
@@ -133,6 +134,12 @@ Schema-2 session packages add:
   operator-command lifecycle, protocol state snapshots, neutral gaps, backend
   receive times, rejection details, and transport/marker latency;
 - `frame-intervals.csv` for real PsychoPy runs.
+
+Practice is a separately marked stage. Set `protocol.practice.blocks` to `0`
+with no stimuli and zero repetitions to disable it, or to `1` for one recorded
+practice stage. After practice, the subject sees a neutral completion screen
+until the operator starts experiment block 1 or retries the final practice
+trial.
 
 `operator-actions.jsonl` also records engine state before and after every
 command, including presentation revision/ID, pending control, expected neutral

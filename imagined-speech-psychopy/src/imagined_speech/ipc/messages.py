@@ -109,7 +109,7 @@ class OperatorViewStatePayload(StrictModel):
     stimulus_label: str | None
     remaining_seconds: float
     duration_seconds: float
-    block_type: str | None
+    stage_type: str | None
     block_number: int | None
     block_count: int | None
     trial_number: int | None

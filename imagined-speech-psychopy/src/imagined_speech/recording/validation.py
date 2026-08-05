@@ -1,7 +1,7 @@
 """Public session-package validation interface.
 
 The validator remains colocated with the append-only reader implementation for
-now so schema-1 reconstruction and schema-2 checksum rules share one parser.
+now so schema-1/2 reconstruction and schema-3 checksum rules share one parser.
 """
 
 from imagined_speech.recording.session import (

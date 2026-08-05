@@ -24,6 +24,19 @@ from imagined_speech.ipc.messages import (
 )
 
 
+def _drive_protocol(engine: ProtocolEngine, clock: VirtualClock) -> None:
+    while engine.state not in {
+        RunState.COMPLETED,
+        RunState.ABORTED,
+        RunState.FAILED,
+    }:
+        if engine.state == RunState.AWAITING_EXPERIMENT:
+            engine.start_experiment()
+        else:
+            clock.advance(engine.remaining_seconds)
+            engine.tick()
+
+
 def test_runtime_records_accepted_and_rejected_commands(tmp_path: Path) -> None:
     resolved = load_experiment(default_config_path())
     clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
@@ -89,9 +102,7 @@ def test_repeated_trial_session_reconstructs_as_complete(tmp_path: Path) -> None
     clock.advance(engine.remaining_seconds)
     engine.tick()
     engine.repeat_current_trial()
-    while engine.state == RunState.RUNNING:
-        clock.advance(engine.remaining_seconds)
-        engine.tick()
+    _drive_protocol(engine, clock)
 
     report = validate_session(writer.path)
     assert report.status == "complete"
@@ -106,21 +117,79 @@ def test_repeated_block_session_reconstructs_as_complete(tmp_path: Path) -> None
     clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
     engine = ProtocolEngine(writer.session_id, plan, resolved.config, clock, writer)
     engine.start()
+    while engine.state != RunState.AWAITING_EXPERIMENT:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+    engine.start_experiment()
     while not (
         engine.current_action is not None
-        and engine.current_action.context.block_type == "experiment"
+        and engine.current_action.context.stage_type == "experiment"
     ):
         clock.advance(engine.remaining_seconds)
         engine.tick()
     engine.repeat_current_block()
-    while engine.state == RunState.RUNNING:
-        clock.advance(engine.remaining_seconds)
-        engine.tick()
+    _drive_protocol(engine, clock)
 
     report = validate_session(writer.path)
     assert report.status == "complete"
     assert report.trial_count == 3
     assert report.phase_count == 12
+
+
+def test_checkpoint_retry_session_reconstructs_as_complete(tmp_path: Path) -> None:
+    resolved = load_experiment(default_config_path())
+    plan = compile_session_plan(resolved.config)
+    writer = SessionWriter(resolved, plan, "PRACTICE-RETRY", tmp_path)
+    clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    engine = ProtocolEngine(writer.session_id, plan, resolved.config, clock, writer)
+    engine.start()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+
+    assert engine.state == RunState.AWAITING_EXPERIMENT
+    engine.repeat_last_practice_trial()
+    while engine.state == RunState.RUNNING:
+        clock.advance(engine.remaining_seconds)
+        engine.tick()
+    engine.start_experiment()
+    _drive_protocol(engine, clock)
+
+    report = validate_session(writer.path)
+    assert report.status == "complete"
+    assert report.trial_count == plan.total_trial_count
+    events = [
+        json.loads(line)
+        for line in (writer.path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert sum(event["event_type"] == "practice_started" for event in events) == 2
+    assert sum(event["event_type"] == "practice_ended" for event in events) == 2
+
+
+def test_acquisition_remains_active_at_practice_checkpoint(tmp_path: Path) -> None:
+    resolved = load_experiment(default_config_path())
+    clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    runtime = SessionRuntime(
+        resolved,
+        "PRACTICE-CHECKPOINT",
+        output_root=tmp_path,
+        clock=clock,
+    )
+    runtime.start()
+    runtime.start_protocol()
+    clock.advance(resolved.device.pre_roll_seconds)
+    runtime.tick()
+    while runtime.engine.state == RunState.RUNNING:
+        clock.advance(runtime.engine.remaining_seconds)
+        runtime.tick()
+
+    assert runtime.state == SessionRuntimeState.RUNNING
+    assert runtime.engine.state == RunState.AWAITING_EXPERIMENT
+    assert runtime.acquisition.running
+    command = runtime.execute(OperatorCommand.START_EXPERIMENT)
+    assert command.status == OperatorCommandStatus.ACCEPTED
+    runtime.execute(OperatorCommand.ABORT)
+    runtime.close()
 
 
 def test_acquisition_snapshot_exposes_recent_raw_copy(tmp_path: Path) -> None:
@@ -607,7 +676,7 @@ def test_frame_locked_pause_repeat_trial_and_block_session_validates(
     acknowledge_onset()
     while not (
         engine.current_action is not None
-        and engine.current_action.context.block_type == "practice"
+        and engine.current_action.context.stage_type == "practice"
         and engine.current_action.context.phase is not None
         and engine.current_action.context.phase.value == "thinking"
     ):
@@ -616,17 +685,21 @@ def test_frame_locked_pause_repeat_trial_and_block_session_validates(
 
     while not (
         engine.current_action is not None
-        and engine.current_action.context.block_type == "experiment"
+        and engine.current_action.context.stage_type == "experiment"
         and engine.current_action.context.phase is not None
         and engine.current_action.context.phase.value == "stimulus"
         and engine.current_action.context.attempt == 1
     ):
-        acknowledge_boundary()
+        if engine.state == RunState.AWAITING_EXPERIMENT:
+            engine.start_experiment()
+            acknowledge_onset()
+        else:
+            acknowledge_boundary()
     pause_and_repeat("repeat_current_trial")
 
     while not (
         engine.current_action is not None
-        and engine.current_action.context.block_type == "experiment"
+        and engine.current_action.context.stage_type == "experiment"
         and engine.current_action.context.phase is not None
         and engine.current_action.context.phase.value == "thinking"
         and engine.current_action.context.attempt == 2

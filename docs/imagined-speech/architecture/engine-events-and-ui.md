@@ -3,15 +3,18 @@
 ## Engine model
 
 `ProtocolEngine` is a clock-driven finite-state machine. Its public run states
-are `ready`, `running`, `paused`, `completed`, `aborted`, and `failed`.
+are `ready`, `running`, `paused`, `awaiting_experiment`, `completed`,
+`aborted`, and `failed`.
 Completed, aborted, and failed are terminal.
 
 At construction, `build_runtime_actions` flattens the hierarchical
-`SessionPlan` into two internal action types:
+`SessionPlan` into three internal action types:
 
 - `_EventAction` emits an instantaneous semantic boundary such as block start,
   phase end, or stimulus presentation;
 - `_TimedAction` owns a screen, duration, and contextual identifiers.
+- `_CheckpointAction` owns the frame-acknowledged, untimed practice-complete
+  screen.
 
 Flattening makes transition order explicit. The engine advances through any
 number of instantaneous actions until it reaches a timed action, sets a
@@ -24,6 +27,8 @@ stateDiagram-v2
     running --> running: deadline / boundary events + next timed action
     running --> paused: pause / session_paused
     paused --> running: resume / session_resumed
+    running --> awaiting_experiment: practice complete
+    awaiting_experiment --> running: start experiment or retry final practice trial
     running --> running: repeat / supersede + insert actions
     paused --> paused: repeat / supersede + insert actions
     running --> completed: plan exhausted / session_completed
@@ -74,12 +79,13 @@ Every semantic transition becomes a `ProtocolEvent` containing:
 - event type, event source, and positive numeric marker code;
 - monotonic and UTC timestamps;
 - session and plan identity;
-- optional block, trial, attempt, phase, stimulus, and step context;
+- optional stage, experiment block, trial, attempt, phase, stimulus, and step
+  context;
 - an extensible payload for scope or failure reason.
 
 The source distinguishes engine-generated boundaries, system lifecycle events,
 operator commands, experimenter/subject UI actions, and system actions. Current
-event types cover session, rest, block, break, trial, phase, stimulus
+event types cover session, practice, rest, block, break, trial, phase, stimulus
 presentation, pause/resume, trial/block repeats, refit notes, abort, and
 failure.
 
@@ -113,7 +119,7 @@ returns a presentation-safe immutable snapshot:
 - headline and instruction;
 - current stimulus identity/label;
 - remaining and total duration;
-- practice/experiment block and trial progress.
+- practice-stage or experiment-block trial progress.
 
 Paused and terminal states deliberately replace stimulus content with neutral
 messages. This boundary prevents experimenter diagnostics from leaking into the

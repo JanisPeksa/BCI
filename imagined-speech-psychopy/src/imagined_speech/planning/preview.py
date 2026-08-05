@@ -23,7 +23,7 @@ def render_preview(resolved: ResolvedExperiment) -> str:
     )
     if config.protocol.post_trial_seconds > 0:
         phases += f" -> POST_TRIAL ({config.protocol.post_trial_seconds:g}s)"
-    break_count = max(0, config.protocol.blocks - 1)
+    break_count = max(0, config.protocol.experiment.blocks - 1)
     audio_state = "enabled" if config.presentation.audio.enabled else "disabled"
 
     lines = [
@@ -37,8 +37,9 @@ def render_preview(resolved: ResolvedExperiment) -> str:
         f"Montage: {', '.join(channel.label for channel in resolved.device.eeg_channels)}",
         f"Stimuli: {len(config.stimuli)}",
         f"Recorded trials: {config.recorded_trials} "
-        f"({config.protocol.blocks} blocks x {config.trials_per_block})",
-        f"Practice trials: {config.practice_trials}",
+        f"({config.protocol.experiment.blocks} blocks x {config.trials_per_block})",
+        f"Practice: {config.protocol.practice.blocks} block(s), "
+        f"{config.practice_trials} trial(s)",
         f"Phases: {phases}",
         f"Trial duration: {format_duration(config.trial_duration_seconds)}",
         f"Breaks: {break_count} x "

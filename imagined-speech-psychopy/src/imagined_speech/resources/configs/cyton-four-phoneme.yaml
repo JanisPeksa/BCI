@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 experiment_id: cyton_four_phoneme
 title: Cyton Four-Phoneme Heard-Imagined-Spoken Session
 profile: heard_imagined_spoken
@@ -6,10 +6,13 @@ random_seed: 20260805
 device_profile: ../devices/cyton.yaml
 protocol:
   sequence: [fixation, stimulus, fixation, thinking, fixation, speaking, rest]
-  blocks: 2
-  repetitions_per_stimulus: 2
-  practice_stimulus_ids: [p, m, i, u]
-  practice_repetitions_per_stimulus: 1
+  experiment:
+    blocks: 2
+    repetitions_per_stimulus: 2
+  practice:
+    blocks: 1
+    stimulus_ids: [p, m, i, u]
+    repetitions_per_stimulus: 1
   initial_rest_seconds: 5
   final_rest_seconds: 5
   inter_block_break_seconds: 5

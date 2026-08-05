@@ -55,28 +55,41 @@ class PhaseConfig(StrictModel):
     instruction: str = Field(min_length=1)
 
 
-class ProtocolDesign(StrictModel):
-    sequence: tuple[Phase, ...] = Field(min_length=1)
+class ExperimentDesign(StrictModel):
     blocks: int = Field(ge=1)
     repetitions_per_stimulus: int = Field(ge=1)
-    practice_stimulus_ids: tuple[str, ...] = ()
-    practice_repetitions_per_stimulus: int = Field(default=0, ge=0)
+
+
+class PracticeDesign(StrictModel):
+    blocks: Literal[0, 1]
+    stimulus_ids: tuple[str, ...] = ()
+    repetitions_per_stimulus: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_enabled_state(self) -> "PracticeDesign":
+        if self.blocks == 0:
+            if self.stimulus_ids or self.repetitions_per_stimulus != 0:
+                raise ValueError(
+                    "practice with blocks=0 must have no stimulus IDs and zero repetitions"
+                )
+            return self
+        if not self.stimulus_ids or self.repetitions_per_stimulus <= 0:
+            raise ValueError(
+                "practice with blocks=1 requires stimulus IDs and positive repetitions"
+            )
+        if len(set(self.stimulus_ids)) != len(self.stimulus_ids):
+            raise ValueError("practice stimulus IDs must be unique")
+        return self
+
+
+class ProtocolDesign(StrictModel):
+    sequence: tuple[Phase, ...] = Field(min_length=1)
+    experiment: ExperimentDesign
+    practice: PracticeDesign
     initial_rest_seconds: float = Field(default=0, ge=0)
     final_rest_seconds: float = Field(default=0, ge=0)
     inter_block_break_seconds: float = Field(default=0, ge=0)
     post_trial_seconds: float = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def validate_practice(self) -> "ProtocolDesign":
-        has_stimuli = bool(self.practice_stimulus_ids)
-        has_repetitions = self.practice_repetitions_per_stimulus > 0
-        if has_stimuli != has_repetitions:
-            raise ValueError(
-                "practice stimuli and practice repetitions must either both be set or both be empty"
-            )
-        if len(set(self.practice_stimulus_ids)) != len(self.practice_stimulus_ids):
-            raise ValueError("practice stimulus IDs must be unique")
-        return self
 
 
 class AudioConfig(StrictModel):
@@ -162,6 +175,8 @@ class MarkerConfig(StrictModel):
     block_end: int = 21
     break_start: int = 22
     break_end: int = 23
+    practice_start: int = 24
+    practice_end: int = 25
     trial_start: int = 30
     trial_end: int = 31
     phase_start: dict[Phase, int] = {
@@ -203,6 +218,8 @@ class MarkerConfig(StrictModel):
             self.block_end,
             self.break_start,
             self.break_end,
+            self.practice_start,
+            self.practice_end,
             self.trial_start,
             self.trial_end,
             self.operator_pause,
@@ -231,7 +248,7 @@ class OutputConfig(StrictModel):
 
 
 class ExperimentConfig(StrictModel):
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     experiment_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     title: str = Field(min_length=1)
     profile: ProtocolProfile
@@ -251,7 +268,7 @@ class ExperimentConfig(StrictModel):
         if len(set(stimulus_ids)) != len(stimulus_ids):
             raise ValueError("stimulus IDs must be unique")
 
-        unknown_practice = set(self.protocol.practice_stimulus_ids) - set(stimulus_ids)
+        unknown_practice = set(self.protocol.practice.stimulus_ids) - set(stimulus_ids)
         if unknown_practice:
             raise ValueError(
                 "unknown practice stimulus IDs: " + ", ".join(sorted(unknown_practice))
@@ -272,7 +289,7 @@ class ExperimentConfig(StrictModel):
                 + "; ".join(details)
             )
 
-        if self.recorded_trials % self.protocol.blocks != 0:
+        if self.recorded_trials % self.protocol.experiment.blocks != 0:
             raise ValueError("recorded trial count must divide evenly across blocks")
 
         stimulus_codes = {
@@ -289,6 +306,8 @@ class ExperimentConfig(StrictModel):
             self.markers.block_end,
             self.markers.break_start,
             self.markers.break_end,
+            self.markers.practice_start,
+            self.markers.practice_end,
             self.markers.trial_start,
             self.markers.trial_end,
             self.markers.operator_pause,
@@ -308,18 +327,18 @@ class ExperimentConfig(StrictModel):
 
     @property
     def recorded_trials(self) -> int:
-        return len(self.stimuli) * self.protocol.repetitions_per_stimulus
+        return len(self.stimuli) * self.protocol.experiment.repetitions_per_stimulus
 
     @property
     def practice_trials(self) -> int:
         return (
-            len(self.protocol.practice_stimulus_ids)
-            * self.protocol.practice_repetitions_per_stimulus
+            len(self.protocol.practice.stimulus_ids)
+            * self.protocol.practice.repetitions_per_stimulus
         )
 
     @property
     def trials_per_block(self) -> int:
-        return self.recorded_trials // self.protocol.blocks
+        return self.recorded_trials // self.protocol.experiment.blocks
 
     @property
     def trial_duration_seconds(self) -> float:
@@ -334,7 +353,7 @@ class ExperimentConfig(StrictModel):
         return (
             self.protocol.initial_rest_seconds
             + timed_trials * self.trial_duration_seconds
-            + max(0, self.protocol.blocks - 1)
+            + max(0, self.protocol.experiment.blocks - 1)
             * self.protocol.inter_block_break_seconds
             + self.protocol.final_rest_seconds
         )

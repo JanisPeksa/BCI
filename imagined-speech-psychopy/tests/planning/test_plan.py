@@ -20,7 +20,8 @@ def test_plan_is_deterministic_and_matches_projected_duration() -> None:
     assert first.experiment_trial_count == 8
     assert first.practice_trial_count == 4
     assert first.total_duration_seconds == resolved.config.projected_duration_seconds
-    first_trial = first.blocks[0].trials[0]
+    assert first.practice is not None
+    first_trial = first.practice.trials[0]
     assert len({phase.step_id for phase in first_trial.phases}) == len(
         first_trial.phases
     )
@@ -60,8 +61,8 @@ def test_stimuli_are_evenly_distributed_across_blocks() -> None:
     assert [len(block.trials) for block in plan.experiment_blocks] == [4, 4]
     assert all(
         trial.post_trial_seconds == 1
-        for block in plan.blocks
-        for trial in block.trials
+        for group in plan.trial_groups
+        for trial in group.trials
     )
     assert plan.total_duration_seconds == resolved.config.projected_duration_seconds
     for stimulus in resolved.config.stimuli:
@@ -70,3 +71,21 @@ def test_stimuli_are_evenly_distributed_across_blocks() -> None:
             for block in plan.experiment_blocks
         ]
         assert max(block_counts) - min(block_counts) <= 1
+
+
+def test_disabled_practice_is_omitted_from_the_plan() -> None:
+    config = load_experiment(RESOURCE_ROOT / "configs" / "smoke.yaml").config
+    disabled = config.protocol.practice.model_copy(update={
+        "blocks": 0,
+        "stimulus_ids": (),
+        "repetitions_per_stimulus": 0,
+    })
+    config = config.model_copy(update={
+        "protocol": config.protocol.model_copy(update={"practice": disabled})
+    })
+
+    plan = compile_session_plan(config)
+
+    assert plan.practice is None
+    assert plan.practice_trial_count == 0
+    assert all(block.block_number >= 1 for block in plan.experiment_blocks)

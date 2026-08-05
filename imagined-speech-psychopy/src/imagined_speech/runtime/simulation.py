@@ -18,9 +18,14 @@ def run_virtual(engine: ProtocolEngine) -> None:
     if not isinstance(engine.clock, VirtualClock):
         raise TypeError("virtual runner requires a VirtualClock")
     engine.start()
-    while engine.state == RunState.RUNNING:
-        engine.clock.advance(engine.remaining_seconds)
-        engine.tick()
+    while engine.state not in TERMINAL_STATES:
+        if engine.state == RunState.AWAITING_EXPERIMENT:
+            engine.start_experiment()
+        elif engine.state == RunState.RUNNING:
+            engine.clock.advance(engine.remaining_seconds)
+            engine.tick()
+        else:
+            raise RuntimeError(f"virtual runner cannot drive {engine.state.value}")
 
 
 def run_virtual_presentation(
@@ -43,6 +48,9 @@ def run_virtual_presentation(
             presentation_id = successor.presentation_id if successor else None
             neutral = successor is None
             engine.clock.advance(engine.remaining_seconds)
+        elif engine.state == RunState.AWAITING_EXPERIMENT:
+            engine.start_experiment()
+            continue
         else:
             raise RuntimeError(
                 f"virtual presentation cannot drive {engine.state.value} without a command"
@@ -83,7 +91,12 @@ def run_real(engine: ProtocolEngine, poll_interval_seconds: float = 0.02) -> Non
     if poll_interval_seconds <= 0:
         raise ValueError("poll interval must be positive")
     engine.start()
-    while engine.state == RunState.RUNNING:
-        engine.tick()
+    while engine.state not in TERMINAL_STATES:
+        if engine.state == RunState.AWAITING_EXPERIMENT:
+            engine.start_experiment()
+        elif engine.state == RunState.RUNNING:
+            engine.tick()
+        else:
+            raise RuntimeError(f"real runner cannot drive {engine.state.value}")
         if engine.state == RunState.RUNNING:
             time.sleep(min(poll_interval_seconds, max(engine.remaining_seconds, 0.001)))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from imagined_speech.runtime.protocol import RunState
@@ -20,7 +20,7 @@ class ViewState:
     stimulus_label: str | None
     remaining_seconds: float
     duration_seconds: float
-    block_type: str | None
+    stage_type: Literal["practice", "experiment"] | None
     block_number: int | None
     block_count: int | None
     trial_number: int | None

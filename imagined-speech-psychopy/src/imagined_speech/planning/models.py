@@ -18,9 +18,8 @@ class PhaseStep(StrictModel):
 
 class TrialPlan(StrictModel):
     trial_id: str
-    block_id: str
     trial_number: int = Field(ge=1)
-    block_trial_number: int = Field(ge=1)
+    group_trial_number: int = Field(ge=1)
     stimulus_id: str
     stimulus_label: str
     phases: tuple[PhaseStep, ...]
@@ -43,20 +42,29 @@ class BreakPlan(StrictModel):
     instruction: str = "BREAK"
 
 
-class BlockPlan(StrictModel):
-    kind: Literal["block"] = "block"
+class PracticePlan(StrictModel):
+    kind: Literal["practice"] = "practice"
+    practice_id: str = "practice"
+    trials: tuple[TrialPlan, ...] = Field(min_length=1)
+
+
+class ExperimentBlockPlan(StrictModel):
+    kind: Literal["experiment_block"] = "experiment_block"
     block_id: str
-    block_type: Literal["practice", "experiment"]
-    block_number: int = Field(ge=0)
+    block_number: int = Field(ge=1)
     block_count: int = Field(ge=1)
     trials: tuple[TrialPlan, ...] = Field(min_length=1)
 
 
-PlanItem = Annotated[RestPlan | BreakPlan | BlockPlan, Field(discriminator="kind")]
+TrialGroupPlan = PracticePlan | ExperimentBlockPlan
+PlanItem = Annotated[
+    RestPlan | BreakPlan | PracticePlan | ExperimentBlockPlan,
+    Field(discriminator="kind"),
+]
 
 
 class SessionPlan(StrictModel):
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[3] = 3
     plan_id: str
     config_hash: str
     experiment_id: str
@@ -65,16 +73,25 @@ class SessionPlan(StrictModel):
     items: tuple[PlanItem, ...]
 
     @property
-    def blocks(self) -> tuple[BlockPlan, ...]:
-        return tuple(item for item in self.items if isinstance(item, BlockPlan))
+    def practice(self) -> PracticePlan | None:
+        return next(
+            (item for item in self.items if isinstance(item, PracticePlan)),
+            None,
+        )
 
     @property
-    def experiment_blocks(self) -> tuple[BlockPlan, ...]:
-        return tuple(block for block in self.blocks if block.block_type == "experiment")
+    def trial_groups(self) -> tuple[TrialGroupPlan, ...]:
+        return tuple(
+            item
+            for item in self.items
+            if isinstance(item, (PracticePlan, ExperimentBlockPlan))
+        )
 
     @property
-    def practice_blocks(self) -> tuple[BlockPlan, ...]:
-        return tuple(block for block in self.blocks if block.block_type == "practice")
+    def experiment_blocks(self) -> tuple[ExperimentBlockPlan, ...]:
+        return tuple(
+            item for item in self.items if isinstance(item, ExperimentBlockPlan)
+        )
 
     @property
     def experiment_trial_count(self) -> int:
@@ -82,7 +99,7 @@ class SessionPlan(StrictModel):
 
     @property
     def practice_trial_count(self) -> int:
-        return sum(len(block.trials) for block in self.practice_blocks)
+        return len(self.practice.trials) if self.practice is not None else 0
 
     @property
     def total_trial_count(self) -> int:
@@ -92,7 +109,7 @@ class SessionPlan(StrictModel):
     def total_duration_seconds(self) -> float:
         total = 0.0
         for item in self.items:
-            if isinstance(item, BlockPlan):
+            if isinstance(item, (PracticePlan, ExperimentBlockPlan)):
                 total += sum(
                     sum(phase.duration_seconds for phase in trial.phases)
                     + trial.post_trial_seconds
