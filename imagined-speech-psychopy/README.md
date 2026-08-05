@@ -102,6 +102,15 @@ asset rendering, frame preflight and drop thresholds, IPC timing tolerance,
 acknowledgement timeout, and PTB audio settings. Device profiles remain schema
 version 1.
 
+The experimenter display override uses the operating-system display device
+name, not the Qt list position. The PsychoPy process resolves that stable name
+against its own Pyglet display list and verifies the native window after it is
+created. A missing or mismatched display fails subject initialization instead
+of silently opening on the primary monitor. Supported window modes are
+`FULL_SCREEN`, `CENTER`, and `TOP_LEFT`; the old Qt-only
+`PREVIOUS_POSITION` mode is not supported and should be replaced with
+`CENTER` in external configurations. `--windowed` selects `CENTER`.
+
 Bundled configurations use PsychoPy's installed `testMonitor` profile. A named
 calibration is loaded when it exists; otherwise presentation falls back to
 `testMonitor` and records both requested and resolved monitor names in the

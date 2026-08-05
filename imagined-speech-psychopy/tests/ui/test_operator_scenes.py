@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from imagined_speech.ipc.messages import (
     MessageType,
     OperatorStatePayload,
     SessionFinalizedPayload,
+    SubjectDisplayTargetPayload,
     message,
 )
 from imagined_speech.ui.experimenter_window import (
@@ -107,6 +109,7 @@ def test_setup_scene_validates_and_builds_complete_create_payload(
     assert not page.create_button.isEnabled()
 
     page.set_service_state("Ready", True)
+    page.subject_screen_combo.setCurrentIndex(1)
     payload = page.create_payload()
 
     assert page.create_button.isEnabled()
@@ -115,6 +118,66 @@ def test_setup_scene_validates_and_builds_complete_create_payload(
     assert payload.output_root == str(tmp_path.resolve())
     assert payload.device_profile_path
     assert payload.random_seed is not None
+    assert payload.subject_display is not None
+    assert payload.screen_index == payload.subject_display.psychopy_index
+    assert "Subject display:" in page.preview_text.toPlainText()
+
+
+def test_version_one_display_and_previous_position_settings_migrate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    assert app is not None
+    targets = (
+        SubjectDisplayTargetPayload(
+            device_name=r"\\.\DISPLAY1",
+            psychopy_index=0,
+            qt_index=1,
+            qt_name=r"\\.\DISPLAY1",
+            geometry=(-1920, 1045, 1920, 1080),
+        ),
+        SubjectDisplayTargetPayload(
+            device_name=r"\\.\DISPLAY2",
+            psychopy_index=1,
+            qt_index=0,
+            qt_name="DELL S3422DW",
+            geometry=(0, 0, 3440, 1440),
+            primary=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "imagined_speech.ui.setup_page.build_subject_display_targets",
+        lambda _screens: targets,
+    )
+    store = ExperimenterSettingsStore(tmp_path / "migration.ini")
+    store.set_value("schema/version", 1)
+    store.set_value(
+        "setup/subject_screen",
+        json.dumps({"name": r"\\.\DISPLAY1", "index": 1}),
+    )
+    store.set_value("setup/subject_window_mode", "PREVIOUS_POSITION")
+    store.sync()
+
+    window = ExperimenterWindow(
+        "127.0.0.1",
+        9999,
+        default_config_path(),
+        "P001",
+        settings_store=store,
+        auto_connect=False,
+    )
+
+    selected = window.setup_page.selected_subject_display()
+    assert selected is not None
+    assert selected.device_name == r"\\.\DISPLAY1"
+    assert window.setup_page.window_mode_combo.currentData() == "CENTER"
+    assert store.int_value("schema/version") == 2
+    migrated = json.loads(str(store.value("setup/subject_screen")))
+    assert migrated["device_name"] == r"\\.\DISPLAY1"
+    window._closing_committed = True
+    window.close()
+    app.processEvents()
 
 
 def test_protocol_scene_and_modular_widgets_render_typed_live_state() -> None:

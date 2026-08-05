@@ -146,15 +146,19 @@ def run_subject_process(host: str, port: int) -> int:
                     session_id = incoming.session_id
                     presentation = incoming.payload["presentation"]
                     assets = incoming.payload.get("assets", {})
-                    window = create_window(presentation["psychopy"])
-                    renderer = PsychopyRenderer(window, presentation, assets)
-                    audio = AudioScheduler(
-                        presentation["audio"]["enabled"],
-                        presentation["audio"]["volume"],
-                        presentation["psychopy"]["audio_latency_mode"],
-                    )
                     error = None
+                    window = None
                     try:
+                        window = create_window(
+                            presentation["psychopy"],
+                            incoming.payload.get("display_target"),
+                        )
+                        renderer = PsychopyRenderer(window, presentation, assets)
+                        audio = AudioScheduler(
+                            presentation["audio"]["enabled"],
+                            presentation["audio"]["volume"],
+                            presentation["psychopy"]["audio_latency_mode"],
+                        )
                         audio.preload(assets)
                         result = run_preflight(window, presentation["psychopy"])
                         result["metadata"].update({
@@ -172,13 +176,23 @@ def run_subject_process(host: str, port: int) -> int:
                         frame_index = 0
                         frame_interval_cursor = 0
                     except Exception as exc:
+                        metadata = dict(getattr(exc, "metadata", {}))
+                        if window is not None:
+                            metadata.update(getattr(
+                                window,
+                                "_imagined_speech_monitor_metadata",
+                                {},
+                            ))
+                            window.close()
+                        renderer = None
+                        audio = None
                         result = {
                             "passed": False,
                             "measured_refresh_rate_hz": 0,
                             "dropped_frame_fraction": 1,
                             "frame_interval_count": 0,
                             "frame_intervals_seconds": (),
-                            "metadata": {},
+                            "metadata": metadata,
                         }
                         error = str(exc)
                     client.send(message(

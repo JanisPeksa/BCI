@@ -21,7 +21,7 @@ def test_jsonl_envelope_round_trip_and_no_authentication_field() -> None:
     [
         (b"\xff\n", "UTF-8"),
         (b"not-json\n", "valid JSON"),
-        (json.dumps({"protocol_version": 1, "type": "unknown"}).encode(), "protocol"),
+        (json.dumps({"protocol_version": 2, "type": "unknown"}).encode(), "protocol"),
         (json.dumps({"protocol_version": 9, "type": "hello"}).encode(), "protocol"),
         (b" " * (MAX_LINE_BYTES + 1), "2 MiB"),
     ],

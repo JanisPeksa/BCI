@@ -6,6 +6,7 @@ from imagined_speech.ipc.messages import (
     AcquisitionStatePayload,
     CreateSessionPayload,
     ServiceStatePayload,
+    SubjectDisplayTargetPayload,
 )
 
 
@@ -18,12 +19,22 @@ def test_create_session_payload_carries_all_setup_overrides() -> None:
         device_profile_path="device.yaml",
         random_seed=42,
         screen_index=1,
+        subject_display=SubjectDisplayTargetPayload(
+            device_name=r"\\.\DISPLAY1",
+            psychopy_index=0,
+            qt_index=1,
+            qt_name=r"\\.\DISPLAY1",
+            geometry=(-1920, 1045, 1920, 1080),
+            primary=False,
+        ),
         window_mode=SubjectWindowMode.CENTER,
     )
 
     assert value.device_profile_path == "device.yaml"
     assert value.random_seed == 42
     assert value.screen_index == 1
+    assert value.subject_display is not None
+    assert value.subject_display.device_name == r"\\.\DISPLAY1"
     assert value.window_mode == SubjectWindowMode.CENTER
 
 

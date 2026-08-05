@@ -9,9 +9,8 @@ from importlib.resources import files
 from PyQt6.QtCore import QByteArray, QSettings, QStandardPaths
 
 
-SETUP_SCHEMA_VERSION = 1
+SETUP_SCHEMA_VERSION = 2
 WORKSPACE_SCHEMA_VERSION = 1
-WINDOW_PLACEMENT_SCHEMA_VERSION = 1
 
 
 class ExperimenterSettingsStore:

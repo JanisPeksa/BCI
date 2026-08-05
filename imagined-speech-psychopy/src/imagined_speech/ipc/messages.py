@@ -1,4 +1,4 @@
-"""Strict version-1 JSONL message contracts for local process communication."""
+"""Strict version-2 JSONL message contracts for local process communication."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from imagined_speech.events import ProtocolEvent
 from imagined_speech.runtime.commands import OperatorCommandRecord
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 
 class ClientRole(StrEnum):
@@ -46,7 +46,7 @@ class MessageType(StrEnum):
 
 
 class Envelope(StrictModel):
-    protocol_version: Literal[1] = PROTOCOL_VERSION
+    protocol_version: Literal[2] = PROTOCOL_VERSION
     type: MessageType
     message_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str | None = None
@@ -60,6 +60,15 @@ class HelloPayload(StrictModel):
     process_id: int = Field(gt=0)
 
 
+class SubjectDisplayTargetPayload(StrictModel):
+    device_name: str | None = None
+    psychopy_index: int = Field(ge=0)
+    qt_index: int = Field(ge=0)
+    qt_name: str = ""
+    geometry: tuple[int, int, int, int]
+    primary: bool = False
+
+
 class CreateSessionPayload(StrictModel):
     config_path: str
     participant_id: str
@@ -67,6 +76,7 @@ class CreateSessionPayload(StrictModel):
     output_root: str | None = None
     auto_start: bool = False
     screen_index: int | None = Field(default=None, ge=0)
+    subject_display: SubjectDisplayTargetPayload | None = None
     window_mode: SubjectWindowMode | None = None
     device_profile_path: str | None = None
     random_seed: int | None = Field(default=None, ge=0)

@@ -76,6 +76,16 @@ def test_legacy_full_screen_configuration_is_rejected(value: bool) -> None:
         PresentationConfig.model_validate({"full_screen": value})
 
 
+def test_previous_position_is_rejected_with_psychopy_migration_guidance() -> None:
+    data = load_experiment(default_config_path()).config.presentation.psychopy.model_dump()
+    data["window_mode"] = "PREVIOUS_POSITION"
+
+    with pytest.raises(ValueError, match="use CENTER instead"):
+        type(load_experiment(default_config_path()).config.presentation.psychopy).model_validate(
+            data
+        )
+
+
 @pytest.mark.parametrize(
     ("name", "backend"),
     [

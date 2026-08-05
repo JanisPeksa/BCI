@@ -265,7 +265,11 @@ class BackendService:
             payload.config_path,
             device_profile_path=payload.device_profile_path,
             random_seed=payload.random_seed,
-            screen_index=payload.screen_index,
+            screen_index=(
+                payload.subject_display.psychopy_index
+                if payload.subject_display is not None
+                else payload.screen_index
+            ),
             window_mode=payload.window_mode,
         )
         self.runtime = SessionRuntime(
@@ -294,6 +298,11 @@ class BackendService:
                     stimulus_id: {name: str(path) for name, path in values.items()}
                     for stimulus_id, values in resolved.assets.items()
                 },
+                "display_target": (
+                    payload.subject_display.model_dump(mode="json")
+                    if payload.subject_display is not None
+                    else None
+                ),
             },
             session_id=self.runtime.writer.session_id,
         )

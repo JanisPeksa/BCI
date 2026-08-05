@@ -30,8 +30,15 @@ from imagined_speech.config import (
     load_experiment,
     resolve_session_setup,
 )
-from imagined_speech.ipc.messages import CreateSessionPayload
+from imagined_speech.ipc.messages import (
+    CreateSessionPayload,
+    SubjectDisplayTargetPayload,
+)
 from imagined_speech.planning.preview import render_preview
+from imagined_speech.ui.display_selection import (
+    build_subject_display_targets,
+    display_target_label,
+)
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -54,6 +61,7 @@ class SessionSetupPage(QWidget):
         self.initial_session_label = session_label or "RUN001"
         self.initial_output_root = output_root
         self._base_resolved: ResolvedExperiment | None = None
+        self._subject_displays: tuple[SubjectDisplayTargetPayload, ...] = ()
         self._audio_context_for_confirmation: str | None = None
         self._service_can_create = False
         self._build_ui()
@@ -101,10 +109,10 @@ class SessionSetupPage(QWidget):
 
         self.subject_screen_combo = QComboBox()
         self.subject_screen_combo.addItem("Use session configuration", None)
-        for index, screen in enumerate(QApplication.screens()):
-            size = screen.size()
+        self._subject_displays = build_subject_display_targets(QApplication.screens())
+        for target in self._subject_displays:
             self.subject_screen_combo.addItem(
-                f"{index}: {screen.name()} ({size.width()}x{size.height()})", index
+                display_target_label(target), target.model_dump(mode="json")
             )
         self.window_mode_combo = QComboBox()
         self.window_mode_combo.addItem("Use session configuration", None)
@@ -210,25 +218,37 @@ class SessionSetupPage(QWidget):
             raise ValueError("no valid experiment configuration is loaded")
         device_text = self.device_edit.text().strip()
         mode = self.window_mode_combo.currentData()
+        target = self.selected_subject_display()
         return resolve_session_setup(
             self.config_edit.text().strip(),
             device_profile_path=device_text or None,
             random_seed=self.seed_spin.value(),
-            screen_index=self.subject_screen_combo.currentData(),
+            screen_index=target.psychopy_index if target else None,
             window_mode=SubjectWindowMode(mode) if mode else None,
         )
 
     def refresh_preview(self) -> None:
         try:
             resolved = self.resolved_setup()
-            self.preview_text.setPlainText(render_preview(resolved))
+            target = self.selected_subject_display()
+            display_summary = (
+                display_target_label(target)
+                if target is not None
+                else (
+                    "Session configuration — PsychoPy screen "
+                    f"{resolved.config.presentation.psychopy.screen_index}"
+                )
+            )
+            self.preview_text.setPlainText(
+                render_preview(resolved) + f"\nSubject display: {display_summary}"
+            )
             montage = ", ".join(channel.label for channel in resolved.device.eeg_channels)
             self.montage_label.setText(
                 f"{montage}; reference: {resolved.device.reference}; "
                 f"ground: {resolved.device.ground}"
             )
             warnings: list[str] = []
-            if len(QApplication.screens()) < 2:
+            if len(self._subject_displays) < 2:
                 warnings.append(
                     "Only one display detected; subject and experimenter views may share it."
                 )
@@ -258,16 +278,26 @@ class SessionSetupPage(QWidget):
         if resolved.config.presentation.audio.enabled and not self.audio_ready.isChecked():
             raise ValueError("confirm audio readiness before recording")
         mode = self.window_mode_combo.currentData()
+        target = self.selected_subject_display()
         output = self.output_edit.text().strip()
         return CreateSessionPayload(
             config_path=str(resolved.config_path),
             participant_id=participant,
             session_label=label,
             output_root=output or None,
-            screen_index=self.subject_screen_combo.currentData(),
+            screen_index=target.psychopy_index if target else None,
+            subject_display=target,
             window_mode=SubjectWindowMode(mode) if mode else None,
             device_profile_path=str(resolved.device_path),
             random_seed=resolved.config.random_seed,
+        )
+
+    def selected_subject_display(self) -> SubjectDisplayTargetPayload | None:
+        value = self.subject_screen_combo.currentData()
+        return (
+            SubjectDisplayTargetPayload.model_validate(value)
+            if value is not None
+            else None
         )
 
     def reset_defaults(self) -> None:

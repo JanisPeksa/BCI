@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ConfigurationError(ValueError):
@@ -33,7 +33,6 @@ class Phase(StrEnum):
 
 class SubjectWindowMode(StrEnum):
     FULL_SCREEN = "FULL_SCREEN"
-    PREVIOUS_POSITION = "PREVIOUS_POSITION"
     TOP_LEFT = "TOP_LEFT"
     CENTER = "CENTER"
 
@@ -136,6 +135,16 @@ class PsychopyConfig(StrictModel):
     require_timing_quality: bool = False
     audio_backend: Literal["ptb"] = "ptb"
     audio_latency_mode: Literal[1, 2, 3, 4] = 3
+
+    @field_validator("window_mode", mode="before")
+    @classmethod
+    def reject_previous_position(cls, value: object) -> object:
+        if value == "PREVIOUS_POSITION":
+            raise ValueError(
+                "PREVIOUS_POSITION is not supported by the PsychoPy subject process; "
+                "use CENTER instead"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_window_size(self) -> "PsychopyConfig":

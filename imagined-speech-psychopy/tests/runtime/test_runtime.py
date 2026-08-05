@@ -292,6 +292,41 @@ def test_preflight_drop_below_fraction_threshold_is_warned_and_persisted(
     )
 
 
+def test_display_initialization_error_fails_and_persists_diagnostics(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    runtime = SessionRuntime(
+        resolved,
+        "DISPLAYFAIL",
+        output_root=tmp_path,
+        frame_locked=True,
+    )
+    display = {
+        "requested": {"device_name": r"\\.\DISPLAY1"},
+        "available": [{"device_name": r"\\.\DISPLAY2", "index": 0}],
+        "verified": False,
+    }
+
+    runtime.record_timing_preflight(TimingPreflightPayload(
+        passed=False,
+        measured_refresh_rate_hz=0,
+        dropped_frame_fraction=1,
+        frame_interval_count=0,
+        metadata={"display": display},
+        error="requested subject display is unavailable",
+    ))
+
+    assert runtime.preflight_passed is False
+    assert runtime.state == SessionRuntimeState.FAILED
+    metadata = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["details"]["display"] == display
+
+
 def test_active_timing_warns_and_marks_affected_trial_without_stopping(
     tmp_path: Path,
 ) -> None:

@@ -19,7 +19,7 @@ def test_new_settings_file_is_seeded_from_committed_ini(tmp_path: Path) -> None:
         "resources", "experimenter_ui.ini"
     ).read_bytes()
     assert target.read_bytes() == committed
-    assert store.int_value("schema/version") == 1
+    assert store.int_value("schema/version") == 2
     assert store.value("workspace/layout_id") == "grid_4"
 
 

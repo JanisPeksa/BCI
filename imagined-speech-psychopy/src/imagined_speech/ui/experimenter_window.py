@@ -28,6 +28,7 @@ else:
     _PYQT_IMPORT_ERROR = None
 
 from imagined_speech import __version__
+from imagined_speech.displays import normalize_device_name
 from imagined_speech.ipc.framing import decode_envelope, encode_envelope
 from imagined_speech.ipc.messages import (
     ClientRole,
@@ -39,6 +40,7 @@ from imagined_speech.ipc.messages import (
     ServiceStatePayload,
     SessionFinalizedPayload,
     SessionReadyPayload,
+    SubjectDisplayTargetPayload,
     message,
 )
 from imagined_speech.runtime.commands import (
@@ -510,7 +512,7 @@ class ExperimenterWindow(QMainWindow):
 
     def _restore_setup_settings(self) -> None:
         version = self.settings.int_value("schema/version")
-        if version not in {None, SETUP_SCHEMA_VERSION}:
+        if version not in {None, 1, SETUP_SCHEMA_VERSION}:
             self.setup_page.warning_label.setText(
                 f"Saved setup schema {version} is unsupported; defaults were used."
             )
@@ -536,6 +538,8 @@ class ExperimenterWindow(QMainWindow):
                 self.setup_page.seed_spin.setValue(seed)
         self._restore_screen(self.settings.value("setup/subject_screen"))
         mode = str(self.settings.value("setup/subject_window_mode", ""))
+        if mode == "PREVIOUS_POSITION":
+            mode = "CENTER"
         mode_index = self.setup_page.window_mode_combo.findData(mode)
         if mode_index >= 0:
             self.setup_page.window_mode_combo.setCurrentIndex(mode_index)
@@ -546,6 +550,11 @@ class ExperimenterWindow(QMainWindow):
         if ready and saved_context == self.setup_page.audio_context():
             self.setup_page.audio_ready.setChecked(True)
             self.setup_page._audio_context_for_confirmation = saved_context
+        if version == 1:
+            self.settings.set_value("schema/version", SETUP_SCHEMA_VERSION)
+            self.settings.set_value("setup/subject_screen", self._screen_identity())
+            self.settings.set_value("setup/subject_window_mode", mode)
+            self.settings.sync()
         self.setup_page.refresh_preview()
 
     def _save_setup_settings(self) -> bool:
@@ -576,12 +585,8 @@ class ExperimenterWindow(QMainWindow):
         self.setup_page.reset_defaults()
 
     def _screen_identity(self) -> str:
-        index = self.setup_page.subject_screen_combo.currentData()
-        if index is None:
-            return ""
-        screens = QApplication.screens()
-        name = screens[index].name() if 0 <= index < len(screens) else ""
-        return json.dumps({"name": name, "index": index}, separators=(",", ":"))
+        target = self.setup_page.selected_subject_display()
+        return target.model_dump_json() if target is not None else ""
 
     def _restore_screen(self, value: object) -> None:
         if not value:
@@ -590,16 +595,57 @@ class ExperimenterWindow(QMainWindow):
             identity = json.loads(str(value))
         except (TypeError, json.JSONDecodeError):
             return
-        screens = QApplication.screens()
-        for index, screen in enumerate(screens):
-            if identity.get("name") and screen.name() == identity["name"]:
-                combo_index = self.setup_page.subject_screen_combo.findData(index)
-                self.setup_page.subject_screen_combo.setCurrentIndex(combo_index)
+        targets: list[tuple[int, SubjectDisplayTargetPayload]] = []
+        combo = self.setup_page.subject_screen_combo
+        for combo_index in range(1, combo.count()):
+            try:
+                target = SubjectDisplayTargetPayload.model_validate(
+                    combo.itemData(combo_index)
+                )
+            except Exception:
+                continue
+            targets.append((combo_index, target))
+
+        requested_device = normalize_device_name(identity.get("device_name"))
+        if requested_device:
+            for combo_index, target in targets:
+                if normalize_device_name(target.device_name) == requested_device:
+                    combo.setCurrentIndex(combo_index)
+                    return
+
+        geometry = identity.get("geometry")
+        if isinstance(geometry, list) and len(geometry) == 4:
+            normalized_geometry = tuple(int(value) for value in geometry)
+            for combo_index, target in targets:
+                if target.geometry == normalized_geometry:
+                    combo.setCurrentIndex(combo_index)
+                    return
+
+        legacy_name = str(identity.get("name") or "")
+        if legacy_name:
+            for combo_index, target in targets:
+                if target.qt_name == legacy_name:
+                    combo.setCurrentIndex(combo_index)
+                    return
+
+        fallback_key = (
+            "psychopy_index"
+            if "psychopy_index" in identity
+            else "qt_index" if "qt_index" in identity else "index"
+        )
+        try:
+            fallback = int(identity.get(fallback_key, -1))
+        except (TypeError, ValueError):
+            return
+        for combo_index, target in targets:
+            target_index = (
+                target.psychopy_index
+                if fallback_key == "psychopy_index"
+                else target.qt_index
+            )
+            if target_index == fallback:
+                combo.setCurrentIndex(combo_index)
                 return
-        fallback = int(identity.get("index", 0))
-        combo_index = self.setup_page.subject_screen_combo.findData(fallback)
-        if combo_index >= 0:
-            self.setup_page.subject_screen_combo.setCurrentIndex(combo_index)
 
     def _restore_workspace_settings(self) -> None:
         version = self.settings.int_value("workspace/schema_version")

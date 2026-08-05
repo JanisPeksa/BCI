@@ -335,7 +335,7 @@ def _run_subject_only(args: argparse.Namespace) -> int:
                 output_root=str(args.output) if args.output else None,
                 auto_start=True,
                 screen_index=args.screen,
-                window_mode="PREVIOUS_POSITION" if args.windowed else None,
+                window_mode="CENTER" if args.windowed else None,
             ),
         )
         client.send(create)

@@ -2,11 +2,164 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from imagined_speech.displays import (
+    native_display_for_window,
+    normalize_device_name,
+)
+from imagined_speech.ipc.messages import SubjectDisplayTargetPayload
 
 
-def create_window(config: dict):
+class DisplaySelectionError(RuntimeError):
+    def __init__(self, message: str, metadata: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.metadata = {"display": metadata}
+
+
+@dataclass(frozen=True)
+class ResolvedPsychopyDisplay:
+    index: int
+    device_name: str | None
+    geometry: tuple[int, int, int, int]
+    screen: Any
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "device_name": self.device_name,
+            "geometry": list(self.geometry),
+        }
+
+
+def _screen_device_name(screen: Any) -> str | None:
+    getter = getattr(screen, "get_device_name", None)
+    if getter is None:
+        return None
+    try:
+        return str(getter())
+    except Exception:
+        return None
+
+
+def _screen_geometry(screen: Any) -> tuple[int, int, int, int]:
+    return (
+        int(screen.x),
+        int(screen.y),
+        int(screen.width),
+        int(screen.height),
+    )
+
+
+def _available_display_metadata(screens: list[Any]) -> list[dict[str, Any]]:
+    return [
+        ResolvedPsychopyDisplay(
+            index=index,
+            device_name=_screen_device_name(screen),
+            geometry=_screen_geometry(screen),
+            screen=screen,
+        ).metadata()
+        for index, screen in enumerate(screens)
+    ]
+
+
+def resolve_psychopy_display(
+    screens: list[Any],
+    configured_index: int,
+    display_target: dict[str, Any] | SubjectDisplayTargetPayload | None,
+) -> ResolvedPsychopyDisplay:
+    available = _available_display_metadata(screens)
+    requested = (
+        SubjectDisplayTargetPayload.model_validate(display_target)
+        if display_target is not None
+        else None
+    )
+    selected_index: int | None = None
+
+    if requested is not None and requested.device_name:
+        requested_name = normalize_device_name(requested.device_name)
+        selected_index = next(
+            (
+                index
+                for index, screen in enumerate(screens)
+                if normalize_device_name(_screen_device_name(screen)) == requested_name
+            ),
+            None,
+        )
+        if selected_index is None:
+            raise DisplaySelectionError(
+                f"requested subject display {requested.device_name!r} is unavailable; "
+                f"available displays: {available}",
+                {
+                    "requested": requested.model_dump(mode="json"),
+                    "available": available,
+                    "verified": False,
+                },
+            )
+    elif requested is not None:
+        geometry_matches = [
+            index
+            for index, screen in enumerate(screens)
+            if _screen_geometry(screen) == requested.geometry
+        ]
+        if len(geometry_matches) == 1:
+            selected_index = geometry_matches[0]
+        elif requested.psychopy_index < len(screens):
+            selected_index = requested.psychopy_index
+    elif 0 <= configured_index < len(screens):
+        selected_index = configured_index
+
+    if selected_index is None:
+        requested_value: Any = (
+            requested.model_dump(mode="json")
+            if requested is not None
+            else {"screen_index": configured_index}
+        )
+        raise DisplaySelectionError(
+            f"requested subject display {requested_value!r} is unavailable; "
+            f"available displays: {available}",
+            {
+                "requested": requested_value,
+                "available": available,
+                "verified": False,
+            },
+        )
+
+    screen = screens[selected_index]
+    return ResolvedPsychopyDisplay(
+        index=selected_index,
+        device_name=_screen_device_name(screen),
+        geometry=_screen_geometry(screen),
+        screen=screen,
+    )
+
+
+def _window_location(window: Any) -> list[int] | None:
+    handle = getattr(window, "winHandle", None)
+    getter = getattr(handle, "get_location", None)
+    if getter is None:
+        return None
+    try:
+        return [int(value) for value in getter()]
+    except Exception:
+        return None
+
+
+def create_window(
+    config: dict,
+    display_target: dict[str, Any] | SubjectDisplayTargetPayload | None = None,
+):
+    import pyglet
     from psychopy import monitors, visual
+
+    screens = list(pyglet.canvas.get_display().get_screens())
+    resolved_display = resolve_psychopy_display(
+        screens,
+        int(config["screen_index"]),
+        display_target,
+    )
 
     requested_monitor = str(config["monitor_name"])
     available_monitors = set(monitors.getAllMonitors())
@@ -21,14 +174,24 @@ def create_window(config: dict):
     monitor.setGamma(float(config["gamma"]))
     mode = config["window_mode"]
     full_screen = mode == "FULL_SCREEN"
-    size = config.get("window_size_px") or [1920, 1080]
+    requested_size = config.get("window_size_px")
+    if full_screen:
+        size = list(resolved_display.geometry[2:])
+        size_clamped = False
+    else:
+        requested_width, requested_height = requested_size or [1024, 720]
+        size = [
+            min(int(requested_width), resolved_display.geometry[2]),
+            min(int(requested_height), resolved_display.geometry[3]),
+        ]
+        size_clamped = size != [int(requested_width), int(requested_height)]
     position = None
     if not full_screen and mode == "TOP_LEFT":
         position = [0, 0]
     window = visual.Window(
         size=size,
         fullscr=full_screen,
-        screen=int(config["screen_index"]),
+        screen=resolved_display.index,
         pos=position,
         units="pix",
         monitor=monitor,
@@ -38,11 +201,58 @@ def create_window(config: dict):
         waitBlanking=bool(config["wait_blanking"]),
         color="#0b0d12",
     )
+    actual_display = native_display_for_window(
+        int(getattr(window, "_hw_handle", 0) or 0)
+    )
+    actual_metadata = (
+        {
+            "index": actual_display.index,
+            "device_name": actual_display.device_name,
+            "geometry": list(actual_display.geometry),
+        }
+        if actual_display is not None
+        else None
+    )
+    verified = actual_display is None
+    if resolved_display.device_name is not None:
+        verified = (
+            actual_display is not None
+            and normalize_device_name(actual_display.device_name)
+            == normalize_device_name(resolved_display.device_name)
+        )
+    display_metadata = {
+        "requested": (
+            SubjectDisplayTargetPayload.model_validate(display_target).model_dump(
+                mode="json"
+            )
+            if display_target is not None
+            else {"screen_index": int(config["screen_index"])}
+        ),
+        "resolved": resolved_display.metadata(),
+        "actual": actual_metadata,
+        "window": {
+            "mode": mode,
+            "full_screen": full_screen,
+            "position": _window_location(window),
+            "size": [int(value) for value in window.size],
+            "requested_size": requested_size,
+            "size_clamped": size_clamped,
+        },
+        "verified": verified,
+    }
+    if resolved_display.device_name is not None and not verified:
+        window.close()
+        raise DisplaySelectionError(
+            "PsychoPy window opened on a different display than requested: "
+            f"requested {resolved_display.device_name!r}, actual {actual_metadata!r}",
+            display_metadata,
+        )
     window.mouseVisible = not bool(config["hide_cursor"])
     window._imagined_speech_monitor_metadata = {
         "requested_monitor_name": requested_monitor,
         "resolved_monitor_name": monitor_name,
         "monitor_profile_found": requested_monitor in available_monitors,
+        "display": display_metadata,
     }
     return window
 

@@ -12,6 +12,7 @@ from imagined_speech.ipc.messages import (
     HelloPayload,
     MessageType,
     ServiceStatePayload,
+    SubjectDisplayTargetPayload,
     message,
 )
 from imagined_speech.ipc.server import BackendService
@@ -113,11 +114,24 @@ def test_session_creation_does_not_require_or_initialize_subject(
             config_path=str(default_config_path()),
             participant_id="LAZY001",
             output_root=str(tmp_path),
+            screen_index=1,
+            subject_display=SubjectDisplayTargetPayload(
+                device_name=r"\\.\DISPLAY1",
+                psychopy_index=0,
+                qt_index=1,
+                qt_name=r"\\.\DISPLAY1",
+                geometry=(-1920, 1045, 1920, 1080),
+            ),
         ))
 
         assert service.runtime is not None
         assert service.runtime.state.value == "created"
+        assert service.runtime.resolved.config.presentation.psychopy.screen_index == 0
         assert service._subject_init is not None
+        assert (
+            service._subject_init.payload["display_target"]["device_name"]
+            == r"\\.\DISPLAY1"
+        )
         assert service._clock_phase is None
         assert ClientRole.SUBJECT not in service.connections
         service.runtime.close()

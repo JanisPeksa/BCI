@@ -37,6 +37,33 @@ then changes from **Init subject UI** to **Start protocol**. The subject process
 exits at finalization, so a later recording receives new identifiers, buffers,
 callbacks, writers, process state, and a newly created PsychoPy window.
 
+## Stable display selection
+
+Qt and Pyglet do not guarantee the same monitor ordering. The operator
+therefore enumerates Windows display devices using the same native API as
+Pyglet and sends the selected device name, setup-time indexes, geometry, and
+primary-display state with session creation. The backend forwards that target
+without interpreting it. The subject process resolves the device name against
+its current Pyglet screens immediately before creating the window.
+
+The configured `screen_index` remains the fallback for YAML and headless CLI
+runs that have no stable operator-selected target. Both named targets and
+fallback indexes are validated before calling PsychoPy, preventing Pyglet's
+otherwise silent fallback to its first screen. On Windows the created native
+window is resolved back to a monitor device and must match the request. A
+missing, disconnected, or mismatched display is a fatal initialization error
+and is recorded through timing-preflight metadata.
+
+The supported opening policies are:
+
+- `FULL_SCREEN`, using the resolved display's dimensions;
+- `CENTER`, using the configured window size or a bounded 1024x720 default;
+- `TOP_LEFT`, using the same bounded size at display-relative position (0, 0).
+
+Oversized windowed dimensions are clamped and recorded. The former Qt-only
+`PREVIOUS_POSITION` policy is deliberately unsupported by the process-isolated
+PsychoPy UI.
+
 ## Flip-locked transitions
 
 Each current presentation and its authorized successor carry a unique
