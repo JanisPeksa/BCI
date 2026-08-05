@@ -1,6 +1,0 @@
-# environment variables
-env
-**.env
-
-# misc
-**__pycache__

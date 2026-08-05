@@ -1,9 +1,0 @@
-**/__pycache__
-**/.DS_Store
-.idea
-.vscode
-venv/**
-.env
-online_data/
-eeg_ai_layer/data/
-.venv
