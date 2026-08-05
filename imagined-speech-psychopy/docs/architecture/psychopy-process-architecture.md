@@ -22,15 +22,20 @@ presentation package.
 ## Processes and session lifecycle
 
 The `run` supervisor starts the backend, reads its selected loopback port from
-a private bootstrap pipe, and then starts operator and subject clients. The
-clients identify only their role and protocol/software version; authentication
-is intentionally absent. One operator and one subject may connect.
+a private bootstrap pipe, and then starts the operator client. The operator
+launches a subject client on demand only after a session exists and the
+operator selects **Init subject UI**. Clients identify only their role and
+protocol/software version; authentication is intentionally absent. One
+operator and one subject may connect.
 
 The backend stays alive between recordings but owns zero or one active runtime.
-`CreateSession` constructs a fresh runtime and package, sends `SubjectInit`,
-waits for display/audio timing preflight, starts acquisition, and reports
-`READY`. Execution waits for `Start protocol`. A later recording receives new
-identifiers, buffers, callbacks, writers, and a newly created PsychoPy window.
+`CreateSession` constructs a fresh runtime and package without requiring or
+starting PsychoPy. When the on-demand subject connects, the backend performs
+clock calibration, sends `SubjectInit`, waits for display/audio timing
+preflight, starts acquisition, and reports `READY`. The primary operator action
+then changes from **Init subject UI** to **Start protocol**. The subject process
+exits at finalization, so a later recording receives new identifiers, buffers,
+callbacks, writers, process state, and a newly created PsychoPy window.
 
 ## Flip-locked transitions
 
@@ -65,6 +70,13 @@ Malformed framing, protocol mismatch, duplicate roles, stale sessions, and
 unknown message types are rejected. Subject loss or acknowledgement timeout
 during execution fails the recording. Before execution, the subject may
 reconnect and repeat preflight. Operator loss during recording starts a short
-reconnect grace period before controlled failure. If configured timing quality
-is required, preflight or active frame-quality failure neutralizes the display
-and fails safely; otherwise it is persisted as a warning.
+reconnect grace period before controlled failure. Display timing-quality misses
+do not fail or abort a session. Preflight misses and active dropped frames are
+shown to the operator as warnings and persisted in presentation metadata. Each
+active dropped frame is attributed to its trial ID and attempt when available,
+so affected trial attempts can be identified or excluded during analysis.
+PsychoPy sends a timing-only IPC sample when a slow frame is detected, allowing
+the operator warning to update without waiting for the next presentation
+boundary and without advancing protocol state. Complete active intervals are
+stored in `frame-intervals.csv`; preflight intervals are stored separately in
+`preflight-frame-intervals.csv`.

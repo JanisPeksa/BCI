@@ -44,7 +44,7 @@ where = ["src"]
 include = ["imagined_speech*"]
 
 [tool.setuptools.package-data]
-imagined_speech = ["resources/**/*.yaml"]
+imagined_speech = ["resources/**/*.yaml", "resources/*.ini"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

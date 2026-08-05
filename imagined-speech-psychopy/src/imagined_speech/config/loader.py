@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from imagined_speech.config.models import (
     ExperimentConfig,
     ResolvedExperiment,
     StrictModel,
+    SubjectWindowMode,
 )
 
 
@@ -87,4 +89,41 @@ def load_experiment(path: str | Path) -> ResolvedExperiment:
         device=device,
         device_path=device_path,
         assets=assets,
+    )
+
+
+def resolve_session_setup(
+    config_path: str | Path,
+    *,
+    device_profile_path: str | Path | None = None,
+    random_seed: int | None = None,
+    screen_index: int | None = None,
+    window_mode: SubjectWindowMode | None = None,
+) -> ResolvedExperiment:
+    """Load and fully validate one operator-selected session setup."""
+
+    resolved = load_experiment(config_path)
+    selected_device_path = (
+        Path(device_profile_path).expanduser().resolve()
+        if device_profile_path is not None
+        else resolved.device_path
+    )
+    device = load_device_profile(selected_device_path)
+    config_data = resolved.config.model_dump(mode="python")
+    config_data["device_profile"] = selected_device_path
+    if random_seed is not None:
+        config_data["random_seed"] = random_seed
+    psychopy_data = dict(config_data["presentation"]["psychopy"])
+    if screen_index is not None:
+        psychopy_data["screen_index"] = screen_index
+    if window_mode is not None:
+        psychopy_data["window_mode"] = window_mode
+    config_data["presentation"]["psychopy"] = psychopy_data
+    config = _validate_model(ExperimentConfig, config_data, resolved.config_path)
+    assert isinstance(config, ExperimentConfig)
+    return replace(
+        resolved,
+        config=config,
+        device=device,
+        device_path=selected_device_path,
     )

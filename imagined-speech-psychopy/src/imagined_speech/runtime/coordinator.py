@@ -29,6 +29,7 @@ from imagined_speech.runtime.commands import (
 )
 from imagined_speech.ipc.messages import (
     FrameAcknowledgementPayload,
+    FrameTimingPayload,
     TimingPreflightPayload,
 )
 from imagined_speech.planning import SessionPlan, compile_session_plan
@@ -95,6 +96,12 @@ class SessionRuntime:
         self._frame_intervals: list[float] = []
         self._neutral_started_ns: int | None = None
         self.timing_warnings: list[str] = []
+        self._dropped_frame_count = 0
+        self._unattributed_dropped_frame_count = 0
+        self._affected_trial_attempts: dict[
+            tuple[str, int], dict[str, object]
+        ] = {}
+        self._dropped_frame_warning: str | None = None
 
     @property
     def needs_final_clock_calibration(self) -> bool:
@@ -152,11 +159,46 @@ class SessionRuntime:
             raise
 
     def record_timing_preflight(self, result: TimingPreflightPayload) -> None:
+        if result.frame_intervals_seconds:
+            self.writer.record_preflight_frame_intervals(
+                result.frame_intervals_seconds
+            )
+        expected = 1 / self.resolved.config.presentation.psychopy.refresh_rate_hz
+        maximum = (
+            expected
+            * self.resolved.config.presentation.psychopy.max_frame_interval_factor
+        )
+        dropped_intervals = tuple(
+            value for value in result.frame_intervals_seconds if value > maximum
+        )
+        dropped_count = len(dropped_intervals)
+        quality_warning = result.error is None and (
+            not result.passed or dropped_count > 0
+        )
+        self.preflight_passed = result.error is None
+        if quality_warning:
+            warning = (
+                f"Display timing preflight warning: {dropped_count} dropped frame(s); "
+                "the protocol may continue and timing details were logged."
+                if dropped_count
+                else (
+                    "Display timing preflight warning: configured timing thresholds "
+                    "were not met. The protocol may continue; timing details were logged."
+                )
+            )
+            self.timing_warnings.append(warning)
+        outcome = (
+            "failed"
+            if result.error is not None
+            else "warning" if quality_warning else "passed"
+        )
         self.writer.record_presentation_metadata({
             "driver": "psychopy",
             "software_version": __version__,
             "passed": result.passed,
-            "threshold_outcome": "passed" if result.passed else "failed",
+            "threshold_outcome": outcome,
+            "timing_policy": "warn_and_continue",
+            "timing_warnings": list(self.timing_warnings),
             "measured_refresh_rate_hz": result.measured_refresh_rate_hz,
             "dropped_frame_fraction": result.dropped_frame_fraction,
             "frame_interval_count": result.frame_interval_count,
@@ -164,23 +206,157 @@ class SessionRuntime:
             "audio": self.resolved.config.presentation.audio.model_dump(mode="json"),
             "details": result.metadata,
             "error": result.error,
+            "preflight_timing_quality": {
+                "frame_interval_count": len(result.frame_intervals_seconds),
+                "dropped_frame_count": dropped_count,
+                "dropped_frame_fraction": result.dropped_frame_fraction,
+                "maximum_frame_interval_seconds": maximum,
+                "max_observed_frame_interval_seconds": (
+                    max(result.frame_intervals_seconds)
+                    if result.frame_intervals_seconds
+                    else None
+                ),
+                "artifact": (
+                    "preflight-frame-intervals.csv"
+                    if result.frame_intervals_seconds
+                    else None
+                ),
+            },
         })
-        self.preflight_passed = result.passed or not (
-            self.resolved.config.presentation.psychopy.require_timing_quality
-        )
-        if not result.passed and self.preflight_passed:
-            warning = result.error or "display timing preflight violated configured thresholds"
-            self.timing_warnings.append(warning)
-            self.writer.record_presentation_metadata({
-                "threshold_outcome": "warning",
-                "timing_warnings": list(self.timing_warnings),
-            })
+        # Timing-quality misses are evidence to preserve, not a reason to discard
+        # an otherwise usable recording. Errors mean the subject UI or clock
+        # calibration did not initialize and remain fatal.
         if not self.preflight_passed:
             reason = result.error or "display timing preflight failed"
             self.error = reason
             self.engine.fail(reason)
             self._finalize("failed")
             self.state = SessionRuntimeState.FAILED
+
+    def _ingest_frame_intervals(
+        self,
+        *,
+        intervals: tuple[float, ...],
+        engine_before: dict[str, object],
+        presentation_id: str | None,
+        record: dict[str, object],
+    ) -> dict[str, object]:
+        self._frame_intervals.extend(intervals)
+        self.writer.record_frame_intervals(self._frame_intervals)
+        expected = 1 / self.resolved.config.presentation.psychopy.refresh_rate_hz
+        maximum_interval = (
+            expected
+            * self.resolved.config.presentation.psychopy.max_frame_interval_factor
+        )
+        dropped_intervals = tuple(
+            value for value in intervals if value > maximum_interval
+        )
+        dropped_count = len(dropped_intervals)
+        self._dropped_frame_count += dropped_count
+        trial_id = engine_before.get("trial_id")
+        attempt_value = engine_before.get("attempt")
+        attempt = int(attempt_value) if isinstance(attempt_value, int) else 1
+        trial_number_value = engine_before.get("trial_number")
+        trial_number = (
+            int(trial_number_value) if isinstance(trial_number_value, int) else None
+        )
+
+        if dropped_count and isinstance(trial_id, str):
+            key = (trial_id, attempt)
+            affected = self._affected_trial_attempts.setdefault(key, {
+                "trial_id": trial_id,
+                "trial_number": trial_number,
+                "attempt": attempt,
+                "block_id": engine_before.get("block_id"),
+                "dropped_frame_count": 0,
+                "max_frame_interval_seconds": 0.0,
+                "presentation_ids": [],
+                "step_ids": [],
+                "screens": [],
+            })
+            affected["dropped_frame_count"] = (
+                int(affected["dropped_frame_count"]) + dropped_count
+            )
+            affected["max_frame_interval_seconds"] = max(
+                float(affected["max_frame_interval_seconds"]),
+                max(dropped_intervals),
+            )
+            for field, value in (
+                ("presentation_ids", presentation_id),
+                ("step_ids", engine_before.get("current_step_id")),
+                ("screens", engine_before.get("current_screen")),
+            ):
+                values = affected[field]
+                if isinstance(values, list) and value is not None and value not in values:
+                    values.append(value)
+        elif dropped_count:
+            self._unattributed_dropped_frame_count += dropped_count
+
+        affected_trials = sorted(
+            self._affected_trial_attempts.values(),
+            key=lambda value: (
+                int(value["trial_number"])
+                if isinstance(value["trial_number"], int)
+                else 0,
+                str(value["trial_id"]),
+                int(value["attempt"]),
+            ),
+        )
+        fraction = self._dropped_frame_count / len(self._frame_intervals)
+        minimum_sample_count = (
+            self.resolved.config.presentation.psychopy.preflight_frame_count
+        )
+        threshold_exceeded = (
+            len(self._frame_intervals) >= minimum_sample_count
+            and fraction
+            > self.resolved.config.presentation.psychopy.max_dropped_frame_fraction
+        )
+        summary: dict[str, object] = {
+            "policy": "warn_and_continue",
+            "frame_interval_count": len(self._frame_intervals),
+            "dropped_frame_count": self._dropped_frame_count,
+            "dropped_frame_fraction": fraction,
+            "maximum_frame_interval_seconds": maximum_interval,
+            "configured_max_dropped_frame_fraction": (
+                self.resolved.config.presentation.psychopy.max_dropped_frame_fraction
+            ),
+            "threshold_exceeded": threshold_exceeded,
+            "affected_trial_attempts": affected_trials,
+            "unattributed_dropped_frame_count": self._unattributed_dropped_frame_count,
+        }
+
+        record["active_frame_interval_count"] = len(self._frame_intervals)
+        record["active_dropped_frame_count"] = self._dropped_frame_count
+        record["active_dropped_frame_fraction"] = fraction
+        record["active_timing_threshold_exceeded"] = threshold_exceeded
+        record["timing_quality_summary"] = summary
+        metadata: dict[str, object] = {"active_timing_quality": summary}
+
+        if dropped_count:
+            if self._dropped_frame_warning in self.timing_warnings:
+                self.timing_warnings.remove(self._dropped_frame_warning)
+            latest = "outside a trial"
+            if isinstance(trial_id, str):
+                trial_label = (
+                    f"trial {trial_number}" if trial_number is not None else trial_id
+                )
+                latest = f"{trial_label}, attempt {attempt}"
+            trial_attempt_count = len(affected_trials)
+            self._dropped_frame_warning = (
+                f"Display timing warning: {self._dropped_frame_count} dropped frame(s) "
+                f"affected {trial_attempt_count} trial attempt(s) (latest: {latest}). "
+                "The protocol is continuing; pause if display instability persists."
+            )
+            self.timing_warnings.append(self._dropped_frame_warning)
+            record["timing_warning"] = self._dropped_frame_warning
+            record["dropped_frame_intervals_seconds"] = dropped_intervals
+            metadata.update({
+                "threshold_outcome": "warning",
+                "timing_policy": "warn_and_continue",
+                "timing_warnings": list(self.timing_warnings),
+            })
+        self.writer.record_presentation_metadata(metadata)
+        return summary
 
     def presentation_state(self) -> dict[str, object] | None:
         if not isinstance(self.engine, FrameLockedProtocolEngine):
@@ -229,6 +405,7 @@ class SessionRuntime:
             "dropped_frames": acknowledgement.dropped_frames,
             "frame_interval_seconds": acknowledgement.frame_interval_seconds,
             "frame_interval_count": len(acknowledgement.frame_intervals_seconds),
+            "frame_intervals_seconds": acknowledgement.frame_intervals_seconds,
             "audio_scheduled_time": acknowledgement.audio_scheduled_time,
             "audio_started": acknowledgement.audio_started,
             "engine_before": engine_before,
@@ -263,51 +440,72 @@ class SessionRuntime:
             if not intervals and acknowledgement.frame_interval_seconds is not None:
                 intervals = (acknowledgement.frame_interval_seconds,)
             if intervals:
-                self._frame_intervals.extend(intervals)
-                self.writer.record_frame_intervals(self._frame_intervals)
-                expected = 1 / self.resolved.config.presentation.psychopy.refresh_rate_hz
-                maximum = (
-                    expected
-                    * self.resolved.config.presentation.psychopy.max_frame_interval_factor
-                )
-                dropped = sum(value > maximum for value in self._frame_intervals)
-                fraction = dropped / len(self._frame_intervals)
-                record["active_frame_interval_count"] = len(self._frame_intervals)
-                record["active_dropped_frame_count"] = dropped
-                record["active_dropped_frame_fraction"] = fraction
-                minimum_sample_count = (
-                    self.resolved.config.presentation.psychopy.preflight_frame_count
-                )
-                quality_failed = (
-                    len(self._frame_intervals) >= minimum_sample_count
-                    and fraction
-                    > self.resolved.config.presentation.psychopy.max_dropped_frame_fraction
-                )
-                if quality_failed:
-                    reason = (
-                        "active presentation frame timing violated configured thresholds"
+                presentation_id = (
+                    acknowledgement.previous_presentation_id
+                    or (
+                        str(engine_before["presentation_id"])
+                        if engine_before.get("presentation_id") is not None
+                        else acknowledgement.presentation_id
                     )
-                    if self.resolved.config.presentation.psychopy.require_timing_quality:
-                        record["timing_error"] = reason
-                        if self.engine.state not in TERMINAL_STATES:
-                            self.error = reason
-                            self.writer.record_presentation_metadata({
-                                "threshold_outcome": "failed",
-                                "timing_error": reason,
-                            })
-                            self.engine.request_failure(reason)
-                    else:
-                        if reason not in self.timing_warnings:
-                            self.timing_warnings.append(reason)
-                            self.writer.record_presentation_metadata({
-                                "threshold_outcome": "warning",
-                                "timing_warnings": list(self.timing_warnings),
-                            })
-                        record["timing_warning"] = reason
+                )
+                self._ingest_frame_intervals(
+                    intervals=intervals,
+                    engine_before=engine_before,
+                    presentation_id=presentation_id,
+                    record=record,
+                )
         except Exception as exc:
             record["error"] = str(exc)
             record["exception_type"] = type(exc).__name__
             record["engine_after"] = self.engine.diagnostic_state()
+            raise
+        finally:
+            self.writer.record_presentation_timing(record)
+
+    def record_frame_timing(
+        self,
+        timing: FrameTimingPayload,
+        *,
+        revision: int,
+    ) -> None:
+        if not isinstance(self.engine, FrameLockedProtocolEngine):
+            raise RuntimeError("runtime is not using frame-locked presentation")
+        received_ns = time.perf_counter_ns()
+        occurrence_ns = timing.subject_monotonic_ns + self.clock_offset_ns
+        engine_before = self.engine.diagnostic_state()
+        record: dict[str, object] = {
+            "kind": "frame_timing_sample",
+            "accepted": False,
+            "revision": revision,
+            "presentation_id": timing.presentation_id,
+            "subject_monotonic_ns": timing.subject_monotonic_ns,
+            "backend_occurrence_monotonic_ns": occurrence_ns,
+            "backend_receive_monotonic_ns": received_ns,
+            "transport_delay_ns": max(0, received_ns - occurrence_ns),
+            "wall_time_utc": timing.wall_time_utc.isoformat(),
+            "frame_index": timing.frame_index,
+            "dropped_frames": timing.dropped_frames,
+            "frame_interval_count": len(timing.frame_intervals_seconds),
+            "frame_intervals_seconds": timing.frame_intervals_seconds,
+            "engine_before": engine_before,
+        }
+        try:
+            if revision != self.engine.presentation_revision:
+                raise ValueError("stale frame timing revision")
+            if timing.presentation_id != self.engine.presentation_id:
+                raise ValueError("frame timing does not match active presentation")
+            if self.engine.state in TERMINAL_STATES:
+                raise ValueError("frame timing arrived after protocol termination")
+            record["accepted"] = True
+            self._ingest_frame_intervals(
+                intervals=timing.frame_intervals_seconds,
+                engine_before=engine_before,
+                presentation_id=timing.presentation_id,
+                record=record,
+            )
+        except Exception as exc:
+            record["error"] = str(exc)
+            record["exception_type"] = type(exc).__name__
             raise
         finally:
             self.writer.record_presentation_timing(record)
@@ -329,7 +527,8 @@ class SessionRuntime:
             raise ValueError("subject abort does not match the active presentation")
         received_ns = time.perf_counter_ns()
         occurrence_ns = acknowledgement.subject_monotonic_ns + self.clock_offset_ns
-        record = {
+        engine_before = self.engine.diagnostic_state()
+        record: dict[str, object] = {
             "kind": "subject_abort",
             "accepted": False,
             "reason": reason,
@@ -345,6 +544,8 @@ class SessionRuntime:
             "dropped_frames": acknowledgement.dropped_frames,
             "frame_interval_seconds": acknowledgement.frame_interval_seconds,
             "frame_interval_count": len(acknowledgement.frame_intervals_seconds),
+            "frame_intervals_seconds": acknowledgement.frame_intervals_seconds,
+            "engine_before": engine_before,
         }
         try:
             self.engine.confirm_subject_abort(
@@ -359,8 +560,12 @@ class SessionRuntime:
             if not intervals and acknowledgement.frame_interval_seconds is not None:
                 intervals = (acknowledgement.frame_interval_seconds,)
             if intervals:
-                self._frame_intervals.extend(intervals)
-                self.writer.record_frame_intervals(self._frame_intervals)
+                self._ingest_frame_intervals(
+                    intervals=intervals,
+                    engine_before=engine_before,
+                    presentation_id=acknowledgement.previous_presentation_id,
+                    record=record,
+                )
         except Exception as exc:
             record["error"] = str(exc)
             raise
@@ -381,7 +586,12 @@ class SessionRuntime:
 
     def tick(self) -> None:
         if (
-            self.state in {SessionRuntimeState.READY, SessionRuntimeState.PRE_ROLL}
+            self.state in {
+                SessionRuntimeState.CREATED,
+                SessionRuntimeState.CONNECTING,
+                SessionRuntimeState.READY,
+                SessionRuntimeState.PRE_ROLL,
+            }
             and self.engine.state in TERMINAL_STATES
         ):
             self.state = SessionRuntimeState.POST_ROLL
@@ -459,8 +669,6 @@ class SessionRuntime:
             elif command == OperatorCommand.REPEAT_BLOCK:
                 self.engine.repeat_current_block(event_source)
             elif command == OperatorCommand.REFIT:
-                if self.engine.state == RunState.RUNNING:
-                    self.engine.pause(event_source)
                 self.engine.record_refit(note or "", event_source)
             elif command == OperatorCommand.ABORT:
                 self.engine.abort(event_source)

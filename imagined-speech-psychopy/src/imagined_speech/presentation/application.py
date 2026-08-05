@@ -13,6 +13,7 @@ from imagined_speech.ipc.messages import (
     ClockPingPayload,
     ClockPongPayload,
     FrameAcknowledgementPayload,
+    FrameTimingPayload,
     HelloPayload,
     MessageType,
     SubjectAbortPayload,
@@ -64,6 +65,39 @@ def _ack(
 def _intervals_since(window, cursor: int) -> tuple[tuple[float, ...], int]:
     intervals = tuple(float(value) for value in window.frameIntervals[cursor:])
     return intervals, len(window.frameIntervals)
+
+
+def _dropped_batch_since(window, cursor: int) -> tuple[tuple[float, ...], int]:
+    if len(window.frameIntervals) <= cursor:
+        return (), cursor
+    if float(window.frameIntervals[-1]) <= float(window.refreshThreshold):
+        return (), cursor
+    return _intervals_since(window, cursor)
+
+
+def _send_frame_timing(
+    client: JsonlClient,
+    *,
+    session_id: str,
+    revision: int,
+    presentation_id: str,
+    frame_index: int,
+    dropped_frames: int,
+    intervals: tuple[float, ...],
+) -> None:
+    client.send(message(
+        MessageType.FRAME_TIMING,
+        FrameTimingPayload(
+            presentation_id=presentation_id,
+            subject_monotonic_ns=time.perf_counter_ns(),
+            wall_time_utc=datetime.now(UTC),
+            frame_index=frame_index,
+            dropped_frames=dropped_frames,
+            frame_intervals_seconds=intervals,
+        ),
+        session_id=session_id,
+        revision=revision,
+    ))
 
 
 def run_subject_process(host: str, port: int) -> int:
@@ -171,16 +205,14 @@ def run_subject_process(host: str, port: int) -> int:
                         ) if audio else (None, False)
                         renderer.draw(active)
                         was_recording = bool(renderer.window.recordFrameIntervals)
-                        flip_time = renderer.flip()
                         if active is not None and not was_recording:
                             renderer.window.frameIntervals = []
                             renderer.window.recordFrameIntervals = True
                             frame_interval_cursor = 0
-                            frame_intervals = ()
-                        else:
-                            frame_intervals, frame_interval_cursor = _intervals_since(
-                                renderer.window, frame_interval_cursor
-                            )
+                        flip_time = renderer.flip()
+                        frame_intervals, frame_interval_cursor = _intervals_since(
+                            renderer.window, frame_interval_cursor
+                        )
                         frame_interval = frame_intervals[-1] if frame_intervals else None
                         frame_index += 1
                         onset_monotonic = time.perf_counter()
@@ -235,12 +267,7 @@ def run_subject_process(host: str, port: int) -> int:
                         if renderer is not None:
                             renderer.window.recordFrameIntervals = False
                             renderer.window.close()
-                        renderer = None
-                        audio = None
-                        active = None
-                        successor = None
-                        session_id = None
-                        revision = 0
+                        return 0
                 elif incoming.type == MessageType.SHUTDOWN:
                     return 0
                 incoming = client.receive_nowait()
@@ -285,6 +312,20 @@ def run_subject_process(host: str, port: int) -> int:
                     renderer.draw(active, max(0.0, duration - elapsed))
                     renderer.flip()
                     frame_index += 1
+                    dropped_batch, next_cursor = _dropped_batch_since(
+                        renderer.window, frame_interval_cursor
+                    )
+                    if dropped_batch:
+                        frame_interval_cursor = next_cursor
+                        _send_frame_timing(
+                            client,
+                            session_id=session_id or "",
+                            revision=revision,
+                            presentation_id=active.get("presentation_id") or "",
+                            frame_index=frame_index,
+                            dropped_frames=int(renderer.window.nDroppedFrames),
+                            intervals=dropped_batch,
+                        )
             if event.getKeys(["escape"]):
                 if renderer is not None and session_id is not None:
                     previous = active.get("presentation_id") if active else None

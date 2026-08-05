@@ -246,7 +246,12 @@ class ProtocolEngine:
             "current_step_id": context.step_id if context else None,
             "block_id": context.block_id if context else None,
             "trial_id": context.trial_id if context else None,
+            "trial_number": context.trial_number if context else None,
+            "trial_count": context.trial_count if context else None,
             "attempt": context.attempt if context else None,
+            "phase": (
+                context.phase.value if context is not None and context.phase else None
+            ),
         }
 
     def start(self) -> None:
@@ -671,6 +676,13 @@ class ProtocolEngine:
         )
 
 
+@dataclass(frozen=True)
+class _PendingControl:
+    kind: str
+    source: EventSource
+    note: str | None = None
+
+
 class FrameLockedProtocolEngine(ProtocolEngine):
     """Protocol engine whose visible boundaries commit only on frame acknowledgements."""
 
@@ -680,7 +692,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         self._presentation_counter = 0
         self._presentation_revision = 0
         self._presentation_id: str | None = None
-        self._pending_control: tuple[str, EventSource] | None = None
+        self._pending_control: _PendingControl | None = None
         self._event_occurrence_override: tuple[float, datetime] | None = None
         self._control_requested_at: float | None = None
         self._presentation_requested_at: float | None = None
@@ -704,10 +716,10 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             "presentation_revision": self._presentation_revision,
             "presentation_counter": self._presentation_counter,
             "pending_control": (
-                self._pending_control[0] if self._pending_control is not None else None
+                self._pending_control.kind if self._pending_control is not None else None
             ),
             "pending_control_source": (
-                self._pending_control[1].value
+                self._pending_control.source.value
                 if self._pending_control is not None
                 else None
             ),
@@ -772,7 +784,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
     def pause(self, source: EventSource = EventSource.OPERATOR) -> None:
         if self.state != RunState.RUNNING or self._current is None:
             raise RuntimeError(f"cannot pause protocol from {self.state.value}")
-        self._pending_control = ("pause", source)
+        self._pending_control = _PendingControl("pause", source)
         self._presentation_revision += 1
         self._control_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_NEUTRAL
@@ -780,7 +792,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
     def resume(self, source: EventSource = EventSource.OPERATOR) -> None:
         if self.state != RunState.PAUSED or self._current is None:
             raise RuntimeError(f"cannot resume protocol from {self.state.value}")
-        self._pending_control = ("resume", source)
+        self._pending_control = _PendingControl("resume", source)
         self._presentation_counter += 1
         self._presentation_revision += 1
         self._presentation_id = self._make_presentation_id(
@@ -797,7 +809,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             # neutral flip, and preserve the paused state until Resume.
             super().repeat_current_trial(source)
             return
-        self._pending_control = ("repeat_trial", source)
+        self._pending_control = _PendingControl("repeat_trial", source)
         self._presentation_revision += 1
         self._control_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_NEUTRAL
@@ -807,7 +819,23 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         if self.state == RunState.PAUSED:
             super().repeat_current_block(source)
             return
-        self._pending_control = ("repeat_block", source)
+        self._pending_control = _PendingControl("repeat_block", source)
+        self._presentation_revision += 1
+        self._control_requested_at = self.clock.monotonic()
+        self.state = RunState.AWAITING_NEUTRAL
+
+    def record_refit(
+        self, note: str, source: EventSource = EventSource.OPERATOR
+    ) -> None:
+        cleaned = note.strip()
+        if not cleaned:
+            raise ValueError("refit note must not be empty")
+        if self.state == RunState.PAUSED:
+            super().record_refit(cleaned, source)
+            return
+        if self.state != RunState.RUNNING or self._current is None:
+            raise RuntimeError(f"cannot record refit from {self.state.value}")
+        self._pending_control = _PendingControl("refit", source, cleaned)
         self._presentation_revision += 1
         self._control_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_NEUTRAL
@@ -828,7 +856,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             # Paused already means neutral has been acknowledged.
             super().abort(source)
             return
-        self._pending_control = ("abort", source)
+        self._pending_control = _PendingControl("abort", source)
         self._presentation_revision += 1
         self._control_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_NEUTRAL
@@ -842,7 +870,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         if self.state == RunState.PAUSED:
             self.fail(reason)
             return
-        self._pending_control = (f"fail:{reason}", EventSource.SYSTEM)
+        self._pending_control = _PendingControl(f"fail:{reason}", EventSource.SYSTEM)
         self._presentation_revision += 1
         self._control_requested_at = self.clock.monotonic()
         self.state = RunState.AWAITING_NEUTRAL
@@ -861,7 +889,8 @@ class FrameLockedProtocolEngine(ProtocolEngine):
         if revision != self._presentation_revision:
             raise ValueError("stale presentation acknowledgement revision")
         if self._pending_control is not None:
-            control, source = self._pending_control
+            pending = self._pending_control
+            control, source = pending.kind, pending.source
             if control == "resume":
                 if presentation_id != self._presentation_id or neutral:
                     raise ValueError("resume acknowledgement does not match presentation")
@@ -890,7 +919,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             self._control_requested_at = None
             self._event_occurrence_override = occurrence
             try:
-                if control == "pause":
+                if control in {"pause", "refit"}:
                     assert self._current is not None
                     self._paused_remaining = max(
                         0.0,
@@ -905,6 +934,9 @@ class FrameLockedProtocolEngine(ProtocolEngine):
                         source,
                         occurrence=occurrence,
                     )
+                    if control == "refit":
+                        assert pending.note is not None
+                        super().record_refit(pending.note, source)
                 elif control == "repeat_trial":
                     self.state = RunState.RUNNING
                     super().repeat_current_trial(source)

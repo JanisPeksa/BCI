@@ -131,7 +131,9 @@ class PsychopyConfig(StrictModel):
     max_dropped_frame_fraction: float = Field(default=0.01, ge=0, le=1)
     max_ipc_rtt_ms: float = Field(default=25, gt=0)
     frame_ack_timeout_seconds: float = Field(default=2, gt=0)
-    require_timing_quality: bool = True
+    # Legacy configuration field retained for existing experiment files. Timing
+    # threshold misses are warning-only; initialization/transport errors remain fatal.
+    require_timing_quality: bool = False
     audio_backend: Literal["ptb"] = "ptb"
     audio_latency_mode: Literal[1, 2, 3, 4] = 3
 

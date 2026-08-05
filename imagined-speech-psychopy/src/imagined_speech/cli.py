@@ -255,16 +255,6 @@ def _stop_children(processes: list[subprocess.Popen]) -> None:
 
 def _run_supervisor(args: argparse.Namespace) -> int:
     backend, port = _start_backend()
-    subject = subprocess.Popen([
-        sys.executable,
-        "-m",
-        "imagined_speech.cli",
-        "_subject-client",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-    ], env=_child_environment())
     operator_args = [
         sys.executable,
         "-m",
@@ -289,21 +279,12 @@ def _run_supervisor(args: argparse.Namespace) -> int:
             operator_code = operator.poll()
             if operator_code is not None:
                 return operator_code
-            subject_code = subject.poll()
-            if subject_code is not None:
-                # The backend observes the disconnect and gets a bounded window
-                # to persist post-roll/failure artifacts before cleanup.
-                try:
-                    backend.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
-                return subject_code or 1
             backend_code = backend.poll()
             if backend_code is not None:
                 return backend_code or 1
             time.sleep(0.05)
     finally:
-        _stop_children([operator, subject, backend])
+        _stop_children([operator, backend])
 
 
 def _run_subject_only(args: argparse.Namespace) -> int:

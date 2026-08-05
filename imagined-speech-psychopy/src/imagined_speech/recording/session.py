@@ -268,11 +268,23 @@ class SessionWriter(EventSink):
             self._presentation_timing_file.flush()
 
     def record_frame_intervals(self, values: tuple[float, ...] | list[float]) -> None:
-        path = self.path / "frame-intervals.csv"
+        self._record_interval_csv("frame-intervals.csv", values)
+
+    def record_preflight_frame_intervals(
+        self, values: tuple[float, ...] | list[float]
+    ) -> None:
+        self._record_interval_csv("preflight-frame-intervals.csv", values)
+
+    def _record_interval_csv(
+        self,
+        filename: str,
+        values: tuple[float, ...] | list[float],
+    ) -> None:
+        path = self.path / filename
         rows = ["frame_index,interval_seconds"]
         rows.extend(f"{index},{value:.12g}" for index, value in enumerate(values))
         path.write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
-        self._artifacts.add("frame-intervals.csv")
+        self._artifacts.add(filename)
 
     def record_operator_command(
         self,

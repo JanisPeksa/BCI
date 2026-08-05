@@ -17,7 +17,11 @@ from imagined_speech.runtime.commands import OperatorCommand, OperatorCommandSta
 from imagined_speech.planning import compile_session_plan
 from imagined_speech.runtime.coordinator import SessionRuntime, SessionRuntimeState
 from imagined_speech.recording import SessionWriter, validate_session
-from imagined_speech.ipc.messages import FrameAcknowledgementPayload
+from imagined_speech.ipc.messages import (
+    FrameAcknowledgementPayload,
+    FrameTimingPayload,
+    TimingPreflightPayload,
+)
 
 
 def test_runtime_records_accepted_and_rejected_commands(tmp_path: Path) -> None:
@@ -181,7 +185,116 @@ def test_abort_before_protocol_start_is_valid_and_explicit(tmp_path: Path) -> No
     assert event.payload["protocol_started"] is False
 
 
-def test_active_timing_uses_all_frames_not_only_boundary_frames(tmp_path: Path) -> None:
+def test_abort_during_subject_initialization_reaches_finalization(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    runtime = SessionRuntime(
+        resolved,
+        "EARLYABORT",
+        output_root=tmp_path,
+        clock=clock,
+        frame_locked=True,
+    )
+    assert runtime.state == SessionRuntimeState.CREATED
+
+    record = runtime.execute(OperatorCommand.ABORT)
+    runtime.tick()
+
+    assert record.status == OperatorCommandStatus.ACCEPTED
+    assert runtime.engine.state == RunState.ABORTED
+    assert runtime.state == SessionRuntimeState.POST_ROLL
+    assert not runtime.protocol_started
+
+    clock.advance(resolved.device.post_roll_seconds)
+    runtime.tick()
+    assert runtime.needs_final_clock_calibration
+
+    # The backend performs this calibration with the connected subject before
+    # asking the runtime to tick once more.
+    runtime.final_clock_calibrated = True
+    runtime.tick()
+
+    assert runtime.state == SessionRuntimeState.FINALIZED
+    assert validate_session(runtime.session_path).status == "aborted"
+    assert not any(
+        (runtime.session_path / name).exists()
+        for name in runtime.acquisition.artifact_names
+    )
+
+
+def test_timing_preflight_threshold_miss_warns_without_failing_session(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    runtime = SessionRuntime(
+        resolved,
+        "PREFLIGHT",
+        output_root=tmp_path,
+        frame_locked=True,
+    )
+
+    runtime.record_timing_preflight(TimingPreflightPayload(
+        passed=False,
+        measured_refresh_rate_hz=59.9,
+        dropped_frame_fraction=0.02,
+        frame_interval_count=120,
+        metadata={"refresh_ok": True, "drops_ok": False},
+    ))
+
+    assert runtime.preflight_passed
+    assert runtime.state == SessionRuntimeState.CREATED
+    assert runtime.engine.state == RunState.READY
+    assert runtime.error is None
+    assert "protocol may continue" in runtime.timing_warnings[0].lower()
+    metadata = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["threshold_outcome"] == "warning"
+    assert metadata["timing_policy"] == "warn_and_continue"
+
+
+def test_preflight_drop_below_fraction_threshold_is_warned_and_persisted(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    runtime = SessionRuntime(
+        resolved,
+        "PREFLIGHTDROP",
+        output_root=tmp_path,
+        frame_locked=True,
+    )
+    intervals = (0.1172,) + (1 / 60,) * 119
+
+    runtime.record_timing_preflight(TimingPreflightPayload(
+        passed=True,
+        measured_refresh_rate_hz=60.0,
+        dropped_frame_fraction=1 / 120,
+        frame_interval_count=120,
+        frame_intervals_seconds=intervals,
+        metadata={"refresh_ok": True, "drops_ok": True, "dropped_frames": 1},
+    ))
+
+    assert runtime.preflight_passed
+    assert "1 dropped frame(s)" in runtime.timing_warnings[0]
+    rows = (runtime.session_path / "preflight-frame-intervals.csv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(rows) == 121
+    metadata = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["threshold_outcome"] == "warning"
+    assert metadata["preflight_timing_quality"]["dropped_frame_count"] == 1
+    assert metadata["preflight_timing_quality"]["artifact"] == (
+        "preflight-frame-intervals.csv"
+    )
+
+
+def test_active_timing_warns_and_marks_affected_trial_without_stopping(
+    tmp_path: Path,
+) -> None:
     resolved = load_experiment(default_config_path())
     clock = VirtualClock(datetime(2026, 1, 1, tzinfo=UTC))
     runtime = SessionRuntime(
@@ -204,16 +317,30 @@ def test_active_timing_uses_all_frames_not_only_boundary_frames(tmp_path: Path) 
     )
     successor = runtime.engine.successor_view_state()
     assert successor is not None
-    intervals = (0.02851,) + (1 / 60,) * 119
-
     runtime.acknowledge_frame(
         FrameAcknowledgementPayload(
             previous_presentation_id=first,
             presentation_id=successor.presentation_id,
+            subject_monotonic_ns=2_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+            frame_index=1,
+        ),
+        revision=runtime.engine.presentation_revision,
+    )
+    active_trial_presentation = runtime.engine.presentation_id
+    assert runtime.engine.diagnostic_state()["trial_id"] is not None
+    successor = runtime.engine.successor_view_state()
+    assert successor is not None
+    intervals = (0.02851, 0.1172) + (1 / 60,) * 118
+
+    runtime.acknowledge_frame(
+        FrameAcknowledgementPayload(
+            previous_presentation_id=active_trial_presentation,
+            presentation_id=successor.presentation_id,
             subject_monotonic_ns=3_000_000_000,
             wall_time_utc=datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
             frame_index=121,
-            dropped_frames=1,
+            dropped_frames=2,
             frame_interval_seconds=intervals[-1],
             frame_intervals_seconds=intervals,
         ),
@@ -222,10 +349,160 @@ def test_active_timing_uses_all_frames_not_only_boundary_frames(tmp_path: Path) 
 
     assert runtime.engine.state == RunState.RUNNING
     assert runtime.error is None
+    assert len(runtime.timing_warnings) == 1
+    assert "2 dropped frame(s)" in runtime.timing_warnings[0]
     rows = (runtime.session_path / "frame-intervals.csv").read_text(
         encoding="utf-8"
     ).splitlines()
     assert len(rows) == 121
+    metadata = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(encoding="utf-8")
+    )
+    quality = metadata["active_timing_quality"]
+    assert quality["policy"] == "warn_and_continue"
+    assert quality["dropped_frame_count"] == 2
+    assert quality["threshold_exceeded"] is True
+    assert quality["unattributed_dropped_frame_count"] == 0
+    assert len(quality["affected_trial_attempts"]) == 1
+    affected = quality["affected_trial_attempts"][0]
+    assert affected["trial_id"]
+    assert affected["attempt"] == 1
+    assert affected["dropped_frame_count"] == 2
+    assert affected["presentation_ids"] == [active_trial_presentation]
+
+    clean_successor = runtime.engine.successor_view_state()
+    assert clean_successor is not None
+    clean_intervals = (1 / 60,) * 200
+    runtime.acknowledge_frame(
+        FrameAcknowledgementPayload(
+            previous_presentation_id=runtime.engine.presentation_id,
+            presentation_id=clean_successor.presentation_id,
+            subject_monotonic_ns=4_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, 0, 0, 4, tzinfo=UTC),
+            frame_index=321,
+            dropped_frames=2,
+            frame_interval_seconds=clean_intervals[-1],
+            frame_intervals_seconds=clean_intervals,
+        ),
+        revision=runtime.engine.presentation_revision,
+    )
+    updated = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(encoding="utf-8")
+    )["active_timing_quality"]
+    assert updated["frame_interval_count"] == 320
+    assert updated["dropped_frame_count"] == 2
+    assert updated["dropped_frame_fraction"] == pytest.approx(2 / 320)
+    assert updated["threshold_exceeded"] is False
+    assert len(runtime.timing_warnings) == 1
+
+
+def test_immediate_frame_timing_warns_without_advancing_protocol(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    runtime = SessionRuntime(
+        resolved,
+        "LIVETIMING",
+        output_root=tmp_path,
+        frame_locked=True,
+    )
+    runtime.engine.start()
+    first = runtime.engine.presentation_id
+    runtime.acknowledge_frame(
+        FrameAcknowledgementPayload(
+            presentation_id=first,
+            subject_monotonic_ns=1_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, tzinfo=UTC),
+            frame_index=1,
+        ),
+        revision=runtime.engine.presentation_revision,
+    )
+    revision = runtime.engine.presentation_revision
+    presentation_id = runtime.engine.presentation_id
+    state_before = runtime.engine.diagnostic_state()
+
+    runtime.record_frame_timing(
+        FrameTimingPayload(
+            presentation_id=presentation_id or "",
+            subject_monotonic_ns=1_500_000_000,
+            wall_time_utc=datetime(2026, 1, 1, 0, 0, 1, 500000, tzinfo=UTC),
+            frame_index=20,
+            dropped_frames=1,
+            frame_intervals_seconds=((1 / 60,) * 18 + (0.1172,)),
+        ),
+        revision=revision,
+    )
+
+    assert runtime.engine.diagnostic_state() == state_before
+    assert runtime.error is None
+    assert "1 dropped frame(s)" in runtime.timing_warnings[0]
+    records = [
+        json.loads(line)
+        for line in (runtime.session_path / "presentation-timing.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert records[-1]["kind"] == "frame_timing_sample"
+    assert records[-1]["accepted"] is True
+
+
+def test_subject_abort_ingests_remaining_dropped_frames(
+    tmp_path: Path,
+) -> None:
+    resolved = load_experiment(default_config_path())
+    runtime = SessionRuntime(
+        resolved,
+        "ABORTTIMING",
+        output_root=tmp_path,
+        frame_locked=True,
+    )
+    runtime.engine.start()
+    first = runtime.engine.presentation_id
+    runtime.acknowledge_frame(
+        FrameAcknowledgementPayload(
+            presentation_id=first,
+            subject_monotonic_ns=1_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, tzinfo=UTC),
+            frame_index=1,
+        ),
+        revision=runtime.engine.presentation_revision,
+    )
+    successor = runtime.engine.successor_view_state()
+    assert successor is not None
+    runtime.acknowledge_frame(
+        FrameAcknowledgementPayload(
+            previous_presentation_id=first,
+            presentation_id=successor.presentation_id,
+            subject_monotonic_ns=2_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+            frame_index=2,
+        ),
+        revision=runtime.engine.presentation_revision,
+    )
+    active = runtime.engine.presentation_id
+    assert runtime.engine.diagnostic_state()["trial_id"] is not None
+
+    runtime.confirm_subject_abort(
+        FrameAcknowledgementPayload(
+            previous_presentation_id=active,
+            presentation_id=None,
+            neutral=True,
+            subject_monotonic_ns=3_000_000_000,
+            wall_time_utc=datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
+            frame_index=10,
+            dropped_frames=1,
+            frame_intervals_seconds=((1 / 60,) * 7 + (0.1172,)),
+        ),
+        revision=runtime.engine.presentation_revision,
+        reason="Escape pressed",
+    )
+
+    assert runtime.engine.state == RunState.ABORTED
+    quality = json.loads(
+        (runtime.session_path / "presentation-metadata.json").read_text(encoding="utf-8")
+    )["active_timing_quality"]
+    assert quality["dropped_frame_count"] == 1
+    assert quality["affected_trial_attempts"][0]["presentation_ids"] == [active]
 
 
 def test_frame_locked_pause_repeat_trial_and_block_session_validates(

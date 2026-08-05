@@ -5,25 +5,34 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import time
 import traceback
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 from imagined_speech import __version__
-from imagined_speech.config import load_experiment
+from imagined_speech.config import resolve_session_setup
 from imagined_speech.events import EventSource
 from imagined_speech.ipc.framing import MAX_LINE_BYTES, FramingError, decode_envelope, encode_envelope
 from imagined_speech.ipc.messages import (
     ClientRole,
     ClockPingPayload,
     ClockPongPayload,
+    AcquisitionStatePayload,
     CreateSessionPayload,
     Envelope,
     FrameAcknowledgementPayload,
+    FrameTimingPayload,
     HelloPayload,
     MessageType,
     OperatorCommandPayload,
+    OperatorStatePayload,
+    OperatorViewStatePayload,
+    ServiceStatePayload,
+    SessionFinalizedPayload,
+    SessionReadyPayload,
+    SessionValidationPayload,
     SubjectAbortPayload,
     TimingPreflightPayload,
     message,
@@ -115,6 +124,10 @@ class BackendService:
         self._calibrations: dict[str, ClockCalibration] = {}
         self._calibration_samples: dict[str, list[ClockCalibration]] = {}
         self._subject_init: Envelope | None = None
+        self._last_storage_check = 0.0
+        self._storage_session_path: Path | None = None
+        self._raw_file_size_bytes = 0
+        self._free_storage_bytes = 0
 
     async def serve(self, host: str = "127.0.0.1", port: int = 0) -> int:
         server = await asyncio.start_server(
@@ -164,7 +177,17 @@ class BackendService:
                     "backend_process_id": os.getpid(),
                 },
             ))
-            if hello.role == ClientRole.SUBJECT:
+            await self._send_service_state()
+            if (
+                hello.role == ClientRole.SUBJECT
+                and self.runtime is not None
+                and self.runtime.state not in {
+                    SessionRuntimeState.FINALIZED,
+                    SessionRuntimeState.FAILED,
+                }
+                and self._subject_init is not None
+            ):
+                self._calibrations.pop("initial", None)
                 await self._begin_clock_calibration("initial")
             while True:
                 line = await reader.readline()
@@ -197,6 +220,7 @@ class BackendService:
             if connection is not None:
                 self.connections.pop(connection.role, None)
                 await self._on_disconnect(connection.role)
+                await self._send_service_state()
                 await connection.close()
             elif not writer.is_closing():
                 await _close_stream_writer(writer)
@@ -214,6 +238,9 @@ class BackendService:
         elif value.type == MessageType.FRAME_ACK:
             self._require_role(connection, ClientRole.SUBJECT)
             await self._frame_ack(value)
+        elif value.type == MessageType.FRAME_TIMING:
+            self._require_role(connection, ClientRole.SUBJECT)
+            await self._frame_timing(value)
         elif value.type == MessageType.SUBJECT_ABORT:
             self._require_role(connection, ClientRole.SUBJECT)
             await self._subject_abort(value)
@@ -234,26 +261,13 @@ class BackendService:
             SessionRuntimeState.FAILED,
         }:
             raise RuntimeError("a session is already active")
-        subject = self.connections.get(ClientRole.SUBJECT)
-        if subject is None:
-            raise RuntimeError("the PsychoPy subject process is not connected")
-        resolved = load_experiment(payload.config_path)
-        psychopy_updates: dict[str, object] = {}
-        if payload.screen_index is not None:
-            psychopy_updates["screen_index"] = payload.screen_index
-        if payload.window_mode is not None:
-            psychopy_updates["window_mode"] = payload.window_mode
-        if psychopy_updates:
-            psychopy = resolved.config.presentation.psychopy.model_copy(
-                update=psychopy_updates
-            )
-            presentation = resolved.config.presentation.model_copy(
-                update={"psychopy": psychopy}
-            )
-            resolved = replace(
-                resolved,
-                config=resolved.config.model_copy(update={"presentation": presentation}),
-            )
+        resolved = resolve_session_setup(
+            payload.config_path,
+            device_profile_path=payload.device_profile_path,
+            random_seed=payload.random_seed,
+            screen_index=payload.screen_index,
+            window_mode=payload.window_mode,
+        )
         self.runtime = SessionRuntime(
             resolved,
             payload.participant_id,
@@ -262,12 +276,15 @@ class BackendService:
             frame_locked=True,
         )
         self.runtime.writer.record_presentation_timing({
-            "kind": "subject_initialization_requested",
+            "kind": "session_created_waiting_for_subject",
             "backend_monotonic_ns": time.perf_counter_ns(),
         })
         self._final_notified = False
         self._auto_start = payload.auto_start
         self._last_presentation_signature = None
+        self._storage_session_path = self.runtime.session_path
+        self._last_storage_check = 0.0
+        await self._send_service_state()
         self._subject_init = message(
             MessageType.SUBJECT_INIT,
             {
@@ -280,7 +297,7 @@ class BackendService:
             },
             session_id=self.runtime.writer.session_id,
         )
-        if self._clock_phase != "initial":
+        if ClientRole.SUBJECT in self.connections:
             self._calibrations.pop("initial", None)
             await self._begin_clock_calibration("initial")
         if payload.auto_start:
@@ -317,12 +334,13 @@ class BackendService:
                 )
             await self._broadcast(message(
                 MessageType.SESSION_READY,
-                {
-                    "session_path": str(runtime.session_path),
-                    "participant_id": runtime.writer.participant_id,
-                },
+                SessionReadyPayload(
+                    session_path=str(runtime.session_path),
+                    participant_id=runtime.writer.participant_id,
+                ),
                 session_id=runtime.writer.session_id,
             ))
+            await self._send_operator_snapshot(runtime)
             if self._auto_start:
                 runtime.execute(OperatorCommand.START_PROTOCOL, source="system")
 
@@ -364,7 +382,37 @@ class BackendService:
                 session_id=runtime.writer.session_id,
             ))
             return
+        # Publish interval warnings before a following transition (especially
+        # the final transition) can advance runtime finalization.
+        await self._send_operator_snapshot(runtime)
         await self._send_presentation_state()
+
+    async def _frame_timing(self, value: Envelope) -> None:
+        runtime = self._require_runtime(value.session_id)
+        timing = FrameTimingPayload.model_validate(value.payload)
+        try:
+            runtime.record_frame_timing(timing, revision=value.revision)
+        except (ValueError, RuntimeError) as exc:
+            diagnostic = {
+                "kind": "frame_timing_rejected",
+                "error": str(exc),
+                "exception_type": type(exc).__name__,
+                "received_revision": value.revision,
+                "received_presentation_id": timing.presentation_id,
+                "engine": runtime.engine.diagnostic_state(),
+            }
+            await self._send_role(ClientRole.SUBJECT, message(
+                MessageType.ERROR,
+                {**diagnostic, "in_reply_to": value.message_id},
+                session_id=runtime.writer.session_id,
+            ))
+            await self._send_role(ClientRole.OPERATOR, message(
+                MessageType.ERROR,
+                diagnostic,
+                session_id=runtime.writer.session_id,
+            ))
+            return
+        await self._send_operator_snapshot(runtime)
 
     async def _subject_abort(self, value: Envelope) -> None:
         runtime = self._require_runtime(value.session_id)
@@ -377,6 +425,7 @@ class BackendService:
             )
         except (ValueError, RuntimeError) as exc:
             runtime.engine.fail(f"invalid subject abort acknowledgement: {exc}")
+        await self._send_operator_snapshot(runtime)
         await self._send_presentation_state()
 
     async def _send_presentation_state(self) -> None:
@@ -447,26 +496,49 @@ class BackendService:
                 state = runtime.presentation_state()
                 if state is not None:
                     await self._send_presentation_state()
-                if time.monotonic() - self._last_snapshot >= 0.1:
-                    self._last_snapshot = time.monotonic()
-                    await self._send_operator_snapshot(runtime)
-                if runtime.state in {
+                terminal = runtime.state in {
                     SessionRuntimeState.FINALIZED,
                     SessionRuntimeState.FAILED,
-                } and not self._final_notified:
+                }
+                if not terminal and time.monotonic() - self._last_snapshot >= 0.1:
+                    self._last_snapshot = time.monotonic()
+                    await self._send_operator_snapshot(runtime)
+                if terminal and not self._final_notified:
                     self._final_notified = True
                     report = runtime.validation_report
+                    validation = (
+                        SessionValidationPayload(
+                            session_path=str(report.session_path),
+                            session_id=report.session_id,
+                            status=report.status,
+                            event_count=report.event_count,
+                            trial_count=report.trial_count,
+                            phase_count=report.phase_count,
+                            sample_count=report.sample_count,
+                            warnings=report.warnings,
+                            operator_command_count=report.operator_command_count,
+                        )
+                        if report
+                        else None
+                    )
                     await self._broadcast(message(
                         MessageType.SESSION_FINALIZED,
-                        {
-                            "state": runtime.state.value,
-                            "session_path": str(runtime.session_path),
-                            "error": runtime.error or runtime.engine.failure_reason,
-                            "engine": runtime.engine.diagnostic_state(),
-                            "validation": asdict(report) if report else None,
-                        },
+                        SessionFinalizedPayload(
+                            state=runtime.state.value,
+                            session_path=str(runtime.session_path),
+                            session_id=runtime.writer.session_id,
+                            participant_id=runtime.writer.participant_id,
+                            session_label=runtime.writer.session_label,
+                            experiment_id=runtime.resolved.config.experiment_id,
+                            device_profile_id=runtime.resolved.device.profile_id,
+                            timing_warnings=tuple(runtime.timing_warnings),
+                            error=runtime.error or runtime.engine.failure_reason,
+                            engine=runtime.engine.diagnostic_state(),
+                            validation=validation,
+                        ),
                         session_id=runtime.writer.session_id,
                     ))
+                    await self._send_service_state()
                     if self._shutdown_requested:
                         await self._send_role(
                             ClientRole.SUBJECT,
@@ -496,26 +568,86 @@ class BackendService:
         engine_view = asdict(runtime.engine.view_state())
         engine_view["run_state"] = runtime.engine.view_state().run_state.value
         snapshot = asdict(runtime.acquisition_snapshot())
+        metadata = runtime.acquisition.backend.metadata
+        fallback_indexes = [
+            channel.board_channel for channel in runtime.resolved.device.eeg_channels
+        ]
+        indexes = tuple(
+            int(value)
+            for value in metadata.get("eeg_channel_indexes", fallback_indexes)
+        )
+        labels = tuple(
+            channel.label for channel in runtime.resolved.device.eeg_channels
+        )
+        self._refresh_storage_metrics(runtime.session_path)
         await self._send_role(ClientRole.OPERATOR, message(
             MessageType.OPERATOR_STATE,
-            {
-                "runtime_state": runtime.state.value,
-                "engine_state": runtime.engine.state.value,
-                "protocol_started": runtime.protocol_started,
-                "recording": runtime.recording,
-                "session_path": str(runtime.session_path),
-                "session_id": runtime.writer.session_id,
-                "participant_id": runtime.writer.participant_id,
-                "view_state": engine_view,
-                "acquisition": snapshot,
-                "events": [event.model_dump(mode="json") for event in runtime.event_memory.events[-100:]],
-                "operator_records": [value.model_dump(mode="json") for value in runtime.operator_records[-100:]],
-                "timing_warnings": list(runtime.timing_warnings),
-                "error": runtime.error or runtime.engine.failure_reason,
-                "engine_diagnostics": runtime.engine.diagnostic_state(),
-            },
+            OperatorStatePayload(
+                runtime_state=runtime.state.value,
+                engine_state=runtime.engine.state.value,
+                protocol_started=runtime.protocol_started,
+                recording=runtime.recording,
+                session_path=str(runtime.session_path),
+                session_id=runtime.writer.session_id,
+                participant_id=runtime.writer.participant_id,
+                session_label=runtime.writer.session_label,
+                experiment_id=runtime.resolved.config.experiment_id,
+                device_profile_id=runtime.resolved.device.profile_id,
+                view_state=OperatorViewStatePayload.model_validate(engine_view),
+                acquisition=AcquisitionStatePayload(
+                    **snapshot,
+                    sampling_rate_hz=runtime.resolved.device.sampling_rate_hz,
+                    eeg_channel_indexes=indexes,
+                    eeg_channel_labels=labels,
+                    raw_file_size_bytes=self._raw_file_size_bytes,
+                    free_storage_bytes=self._free_storage_bytes,
+                ),
+                events=tuple(runtime.event_memory.events[-100:]),
+                operator_records=tuple(runtime.operator_records[-100:]),
+                timing_warnings=tuple(runtime.timing_warnings),
+                error=runtime.error or runtime.engine.failure_reason,
+                engine_diagnostics=runtime.engine.diagnostic_state(),
+            ),
             session_id=runtime.writer.session_id,
         ), critical=False)
+
+    async def _send_service_state(self) -> None:
+        runtime = self.runtime
+        active = bool(
+            runtime is not None
+            and runtime.state not in {
+                SessionRuntimeState.FINALIZED,
+                SessionRuntimeState.FAILED,
+            }
+        )
+        await self._send_role(
+            ClientRole.OPERATOR,
+            message(
+                MessageType.SERVICE_STATE,
+                ServiceStatePayload(
+                    subject_connected=ClientRole.SUBJECT in self.connections,
+                    active_session_id=(runtime.writer.session_id if active else None),
+                    active_runtime_state=(runtime.state.value if runtime else None),
+                    can_create_session=(
+                        not active and ClientRole.SUBJECT not in self.connections
+                    ),
+                ),
+            ),
+            critical=False,
+        )
+
+    def _refresh_storage_metrics(self, session_path: Path) -> None:
+        now = time.monotonic()
+        if (
+            self._storage_session_path == session_path
+            and now - self._last_storage_check < 1.0
+        ):
+            return
+        self._storage_session_path = session_path
+        self._last_storage_check = now
+        raw_path = session_path / "eeg_raw.csv"
+        self._raw_file_size_bytes = raw_path.stat().st_size if raw_path.is_file() else 0
+        self._free_storage_bytes = shutil.disk_usage(session_path).free
 
     async def _on_disconnect(self, role: ClientRole) -> None:
         runtime = self.runtime

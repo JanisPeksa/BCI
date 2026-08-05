@@ -3,17 +3,28 @@ from imagined_speech.ui.experimenter_window import controls_for
 
 
 def test_operator_controls_follow_remote_snapshot_state() -> None:
+    waiting = controls_for("created", "ready")
+    assert waiting.init_subject_ui
+    assert not waiting.subject_ui_initializing
+    assert not waiting.start_protocol
+
+    initializing = controls_for(
+        "created", "ready", subject_initializing=True
+    )
+    assert not initializing.init_subject_ui
+    assert initializing.subject_ui_initializing
+
     ready = controls_for("ready", "ready")
     assert ready.start_protocol
     assert ready.abort
     assert not ready.create_session
 
-    running = controls_for("running", "running")
+    running = controls_for("running", "running", in_trial=True)
     assert running.pause
     assert running.repeat
     assert not running.resume
 
-    paused = controls_for("running", "paused")
+    paused = controls_for("running", "paused", in_trial=True)
     assert paused.resume
     assert paused.repeat
 

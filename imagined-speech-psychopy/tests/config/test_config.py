@@ -12,6 +12,7 @@ from imagined_speech.config import (
     SubjectWindowMode,
     load_device_profile,
     load_experiment,
+    resolve_session_setup,
 )
 from imagined_speech.planning.preview import format_duration
 
@@ -46,6 +47,27 @@ def test_smoke_profile_is_hardware_and_asset_independent() -> None:
     assert resolved.config.presentation.audio.enabled is False
     assert all(not assets for assets in resolved.assets.values())
     assert format_duration(resolved.config.projected_duration_seconds) == "00:00:14"
+
+
+def test_session_setup_resolver_applies_operator_overrides() -> None:
+    device_path = RESOURCE_ROOT / "devices" / "brainflow_synthetic.yaml"
+
+    resolved = resolve_session_setup(
+        default_config_path(),
+        device_profile_path=device_path,
+        random_seed=314,
+        screen_index=1,
+        window_mode=SubjectWindowMode.CENTER,
+    )
+
+    assert resolved.device_path == device_path.resolve()
+    assert resolved.device.backend == "brainflow_synthetic"
+    assert resolved.config.random_seed == 314
+    assert resolved.config.presentation.psychopy.screen_index == 1
+    assert (
+        resolved.config.presentation.psychopy.window_mode
+        == SubjectWindowMode.CENTER
+    )
 
 
 @pytest.mark.parametrize("value", [True, False])

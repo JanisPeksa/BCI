@@ -24,6 +24,8 @@ from PyQt6.QtWidgets import (
     QWidgetAction,
 )
 
+from imagined_speech.ipc.messages import OperatorStatePayload
+
 
 PaneFactory = Callable[[], QWidget]
 
@@ -383,6 +385,17 @@ class MonitoringWorkspace(QWidget):
             clear = getattr(widget, "clear", None)
             if callable(clear):
                 clear()
+
+    def render(self, state: OperatorStatePayload) -> None:
+        """Refresh only widgets currently visible in active panes."""
+
+        for pane in self.active_panes.values():
+            widget = pane.content_widget
+            if widget is None or pane.isHidden() or widget.isHidden():
+                continue
+            render = getattr(widget, "render", None)
+            if callable(render):
+                render(state)
 
     def reset(self) -> None:
         self.assignments = dict(DEFAULT_ASSIGNMENTS)

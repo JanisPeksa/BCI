@@ -10,6 +10,8 @@ from typing import Any, Literal
 from pydantic import Field
 
 from imagined_speech.config import StrictModel, SubjectWindowMode
+from imagined_speech.events import ProtocolEvent
+from imagined_speech.runtime.commands import OperatorCommandRecord
 
 
 PROTOCOL_VERSION = 1
@@ -23,6 +25,7 @@ class ClientRole(StrEnum):
 class MessageType(StrEnum):
     HELLO = "hello"
     HELLO_ACCEPTED = "hello_accepted"
+    SERVICE_STATE = "service_state"
     CREATE_SESSION = "create_session"
     SESSION_READY = "session_ready"
     OPERATOR_COMMAND = "operator_command"
@@ -31,6 +34,7 @@ class MessageType(StrEnum):
     SUBJECT_INIT = "subject_init"
     PRESENTATION_REQUEST = "presentation_request"
     PRESENTATION_INTERRUPT = "presentation_interrupt"
+    FRAME_TIMING = "frame_timing"
     FRAME_ACK = "frame_ack"
     TIMING_PREFLIGHT = "timing_preflight"
     SUBJECT_ABORT = "subject_abort"
@@ -64,11 +68,109 @@ class CreateSessionPayload(StrictModel):
     auto_start: bool = False
     screen_index: int | None = Field(default=None, ge=0)
     window_mode: SubjectWindowMode | None = None
+    device_profile_path: str | None = None
+    random_seed: int | None = Field(default=None, ge=0)
 
 
 class OperatorCommandPayload(StrictModel):
     command: str
     note: str | None = None
+
+
+class ServiceStatePayload(StrictModel):
+    subject_connected: bool
+    active_session_id: str | None = None
+    active_runtime_state: str | None = None
+    can_create_session: bool
+
+
+class SessionReadyPayload(StrictModel):
+    session_path: str
+    participant_id: str
+
+
+class OperatorViewStatePayload(StrictModel):
+    run_state: str
+    screen: str
+    step_id: str | None
+    headline: str
+    instruction: str
+    stimulus_id: str | None
+    stimulus_label: str | None
+    remaining_seconds: float
+    duration_seconds: float
+    block_type: str | None
+    block_number: int | None
+    block_count: int | None
+    trial_number: int | None
+    trial_count: int | None
+    presentation_id: str | None = None
+    revision: int = Field(default=0, ge=0)
+
+
+class AcquisitionStatePayload(StrictModel):
+    running: bool
+    sample_count: int = Field(ge=0)
+    dropped_batches: int = Field(ge=0)
+    dropped_samples: int = Field(ge=0)
+    timestamp_discontinuities: int = Field(ge=0)
+    read_errors: int = Field(ge=0)
+    write_errors: int = Field(ge=0)
+    last_health_kind: str
+    last_health_severity: str
+    channel_names: tuple[str, ...]
+    recent_samples: tuple[tuple[float, ...], ...]
+    sampling_rate_hz: float = Field(gt=0)
+    eeg_channel_indexes: tuple[int, ...]
+    eeg_channel_labels: tuple[str, ...]
+    raw_file_size_bytes: int = Field(ge=0)
+    free_storage_bytes: int = Field(ge=0)
+
+
+class OperatorStatePayload(StrictModel):
+    runtime_state: str
+    engine_state: str
+    protocol_started: bool
+    recording: bool
+    session_path: str
+    session_id: str
+    participant_id: str
+    session_label: str | None
+    experiment_id: str
+    device_profile_id: str
+    view_state: OperatorViewStatePayload
+    acquisition: AcquisitionStatePayload
+    events: tuple[ProtocolEvent, ...] = ()
+    operator_records: tuple[OperatorCommandRecord, ...] = ()
+    timing_warnings: tuple[str, ...] = ()
+    error: str | None = None
+    engine_diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionValidationPayload(StrictModel):
+    session_path: str
+    session_id: str
+    status: str
+    event_count: int = Field(ge=0)
+    trial_count: int = Field(ge=0)
+    phase_count: int = Field(ge=0)
+    sample_count: int = Field(ge=0)
+    warnings: tuple[str, ...] = ()
+    operator_command_count: int = Field(ge=0)
+
+
+class SessionFinalizedPayload(StrictModel):
+    state: str
+    session_path: str
+    session_id: str
+    participant_id: str
+    session_label: str | None
+    experiment_id: str
+    device_profile_id: str
+    timing_warnings: tuple[str, ...] = ()
+    error: str | None = None
+    engine: dict[str, Any] = Field(default_factory=dict)
+    validation: SessionValidationPayload | None = None
 
 
 class TimingPreflightPayload(StrictModel):
@@ -94,6 +196,15 @@ class FrameAcknowledgementPayload(StrictModel):
     frame_intervals_seconds: tuple[float, ...] = ()
     audio_scheduled_time: float | None = None
     audio_started: bool = False
+
+
+class FrameTimingPayload(StrictModel):
+    presentation_id: str = Field(min_length=1)
+    subject_monotonic_ns: int = Field(ge=0)
+    wall_time_utc: datetime
+    frame_index: int = Field(ge=0)
+    dropped_frames: int = Field(default=0, ge=0)
+    frame_intervals_seconds: tuple[float, ...] = Field(min_length=1)
 
 
 class SubjectAbortPayload(StrictModel):

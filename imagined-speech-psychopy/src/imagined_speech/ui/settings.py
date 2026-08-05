@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from importlib.resources import files
 
 from PyQt6.QtCore import QByteArray, QSettings, QStandardPaths
 
@@ -23,8 +24,8 @@ class ExperimenterSettingsStore:
         "setup/device_path",
         "setup/output_root",
         "setup/random_seed",
-        "setup/experimenter_screen",
         "setup/subject_screen",
+        "setup/subject_window_mode",
         "setup/audio_ready",
         "setup/audio_context",
     )
@@ -42,9 +43,14 @@ class ExperimenterSettingsStore:
                     QStandardPaths.StandardLocation.AppConfigLocation
                 )
             )
-            path = root / "imagined-speech" / "experimenter_ui.ini"
+            path = root / "imagined-speech-psychopy" / "experimenter_ui.ini"
         self.path = path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.exists():
+            default_ini = files("imagined_speech").joinpath(
+                "resources", "experimenter_ui.ini"
+            )
+            self.path.write_bytes(default_ini.read_bytes())
         self._settings = QSettings(str(self.path), QSettings.Format.IniFormat)
 
     def value(self, key: str, default: Any = None) -> Any:

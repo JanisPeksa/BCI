@@ -10,18 +10,19 @@ on Windows.
 
 ## Runtime architecture
 
-`run` supervises three long-lived local processes:
+`run` starts two long-lived local processes and one on-demand process:
 
 1. the backend binds an ephemeral `127.0.0.1` TCP port and owns at most one
    active `SessionRuntime`;
 2. the Qt operator connects with the `operator` role;
-3. PsychoPy connects with the `subject` role and creates a fresh window and
-   asset cache for each recording.
+3. the operator launches PsychoPy with the `subject` role only after a session
+   has been configured and the operator selects **Init subject UI**. The subject
+   process exits when that session is finalized.
 
 Communication is strict, versioned, unauthenticated JSON Lines. Loopback
 binding and the private ephemeral port are the intentional access boundary.
-The operator can run consecutive recordings without restarting the three
-processes. The backend serializes all runtime mutations and is the sole owner
+The operator can run consecutive recordings while each receives a fresh
+PsychoPy process. The backend serializes all runtime mutations and is the sole owner
 of acquisition, protocol state, event/marker persistence, and finalization.
 
 PsychoPy receives only presentation-safe state and resolved asset paths. Each
@@ -30,6 +31,25 @@ The subject process schedules an already-authorized successor locally, so TCP
 latency does not lengthen phases. Pause, repeat, and abort first neutralize the
 display. Flip, receipt, marker-attempt, clock-calibration, frame-interval, and
 audio-scheduling data remain auditable in the session package.
+
+## Experimenter workflow
+
+The operator window has two scenes. Session setup validates participant and
+session identifiers, experiment and device profiles, output location, random
+seed, subject-screen overrides, montage, audio readiness, and the compiled
+protocol preview before a recording can be created. Protocol control then
+keeps recording and protocol state visible while exposing start, pause, resume,
+repeat, electrode-adjustment, and abort controls.
+
+Live monitoring panes are registry-backed widgets under
+`src/imagined_speech/ui/widgets`; each widget owns one projection and consumes
+the typed operator-state snapshot. Pane assignments, splitter layouts, setup
+defaults, and window geometry persist in a per-user INI. On entering protocol
+control, PsychoPy is not running: the primary action is **Init subject UI**.
+After PsychoPy connects and passes timing preflight, it becomes **Start
+protocol**. New per-user files are
+seeded from the committed `src/imagined_speech/resources/experimenter_ui.ini`
+without modifying that repository copy.
 
 ## Installation
 

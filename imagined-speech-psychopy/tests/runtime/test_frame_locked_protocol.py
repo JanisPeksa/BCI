@@ -106,6 +106,37 @@ def test_pause_requires_neutral_ack_and_resume_requires_new_onset() -> None:
     assert engine.state == RunState.RUNNING
 
 
+def test_refit_from_running_pauses_on_neutral_then_records_adjustment() -> None:
+    engine, sink, _ = make_engine()
+    engine.start()
+    acknowledge_onset(engine)
+    active = engine.presentation_id
+
+    engine.record_refit("Adjusted F3 contact")
+
+    assert engine.state == RunState.AWAITING_NEUTRAL
+    assert engine.diagnostic_state()["pending_control"] == "refit"
+    engine.acknowledge_frame(
+        previous_presentation_id=active,
+        presentation_id=None,
+        revision=engine.presentation_revision,
+        monotonic_seconds=1.5,
+        wall_time_utc=datetime(2026, 1, 1, 0, 0, 1, 500000, tzinfo=UTC),
+        neutral=True,
+    )
+
+    assert engine.state == RunState.PAUSED
+    boundary = [
+        event for event in sink.events if event.monotonic_seconds == 1.5
+    ]
+    assert [event.event_type for event in boundary] == [
+        EventType.SESSION_PAUSED,
+        EventType.REFIT_RECORDED,
+    ]
+    assert boundary[-1].payload["note"] == "Adjusted F3 contact"
+    assert boundary[-1].payload["scope"] == "initial"
+
+
 @pytest.mark.parametrize(
     "repeat_method",
     ("repeat_current_trial", "repeat_current_block"),

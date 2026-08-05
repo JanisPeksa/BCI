@@ -58,7 +58,7 @@ presentation:
     max_dropped_frame_fraction: 0.01
     max_ipc_rtt_ms: 25
     frame_ack_timeout_seconds: 2
-    require_timing_quality: true
+    require_timing_quality: false
     audio_backend: ptb
     audio_latency_mode: 3
 qc: {enabled: false, line_frequency_hz: 50}

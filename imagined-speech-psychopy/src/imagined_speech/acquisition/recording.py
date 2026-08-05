@@ -230,8 +230,10 @@ class AcquisitionRecorder(EventSink):
         if self._closed:
             return
         if not self._running:
+            # A recorder closed before start has no acquisition to describe.
+            # Writing metadata alone would create a partial artifact set that
+            # makes an otherwise valid early-abort package fail validation.
             self._close_files()
-            self._write_metadata("stopped")
             self._closed = True
             return
 
