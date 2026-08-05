@@ -26,3 +26,6 @@ imagined-speech/sessions/
 # OS
 .DS_Store
 Thumbs.db
+
+.agents/
+.codex/
