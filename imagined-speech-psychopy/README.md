@@ -1,153 +1,256 @@
-# Imagined Speech — PsychoPy Rewrite
+# Imagined Speech EEG recorder
 
-This is the process-isolated PsychoPy rewrite of the imagined-speech EEG
-experiment software. The previous Qt-subject implementation remains preserved
-in the sibling `imagined-speech` project.
+Imagined Speech EEG recorder is a composed application for recording EEG data
+during imagined-speech experiments. It brings together experiment
+configuration, EEG acquisition, a PsychoPy subject display, a PyQt6 operator
+console, live monitoring, timing safeguards, and validated session packages.
 
-The rewrite provides a PsychoPy subject display, PyQt6 operator console, and
-backend-owned session runtime. The package uses a `src` layout and Python 3.11
-on Windows.
+## Table of contents
 
-## Runtime architecture
+- [Introduction](#introduction)
+- [Installation](#installation)
+- [Launch options](#launch-options)
+- [Operator features](#operator-features)
+  - [Session setup](#session-setup)
+  - [Protocol control](#protocol-control)
+  - [Live monitoring](#live-monitoring)
+  - [Session completion](#session-completion)
+- [Application components and architecture](#application-components-and-architecture)
+  - [Communication flow](#communication-flow)
+  - [Recording lifecycle](#recording-lifecycle)
+- [Experiment and data model](#experiment-and-data-model)
 
-`run` starts two long-lived local processes and one on-demand process:
+## Introduction
 
-1. the backend binds an ephemeral `127.0.0.1` TCP port and owns at most one
-   active `SessionRuntime`;
-2. the Qt operator connects with the `operator` role;
-3. the operator launches PsychoPy with the `subject` role only after a session
-   has been configured and the operator selects **Init subject UI**. The subject
-   process exits when that session is finalized.
+The goal of the software is to give a researcher a controlled environment for
+recording EEG data from a subject. Guardrails guide the operator through
+configuration, resource validation, display selection, audio readiness,
+timing preflight, protocol control, and session finalization before research
+data is accepted as complete.
 
-Communication is strict, versioned, unauthenticated JSON Lines. Loopback
-binding and the private ephemeral port are the intentional access boundary.
-The operator can run consecutive recordings while each receives a fresh
-PsychoPy process. The backend serializes all runtime mutations and is the sole owner
-of acquisition, protocol state, event/marker persistence, and finalization.
+The operator has a dedicated console with session controls and live views of
+the recording process. The subject has a separate PsychoPy display that shows
+only the experiment presentation. Operator diagnostics, acquisition state,
+protocol controls, widgets, and warnings remain on the operator side.
 
-PsychoPy receives only presentation-safe state and resolved asset paths. Each
-visible boundary is committed by a correlated `Window.flip()` acknowledgement.
-The subject process schedules an already-authorized successor locally, so TCP
-latency does not lengthen phases. Pause, repeat, and abort first neutralize the
-display. Flip, receipt, marker-attempt, clock-calibration, frame-interval, and
-audio-scheduling data remain auditable in the session package.
-
-## Experimenter workflow
-
-The operator window has two scenes. Session setup validates participant and
-session identifiers, experiment and device profiles, output location, random
-seed, subject-screen overrides, montage, audio readiness, and the compiled
-protocol preview before a recording can be created. Protocol control then
-keeps recording and protocol state visible while exposing start, pause, resume,
-repeat, electrode-adjustment, and abort controls.
-
-Live monitoring panes are registry-backed widgets under
-`src/imagined_speech/ui/widgets`; each widget owns one projection and consumes
-the typed operator-state snapshot. Pane assignments, splitter layouts, setup
-defaults, and window geometry persist in a per-user INI. On entering protocol
-control, PsychoPy is not running: the primary action is **Init subject UI**.
-After PsychoPy connects and passes timing preflight, it becomes **Start
-protocol**. New per-user files are
-seeded from the committed `src/imagined_speech/resources/experimenter_ui.ini`
-without modifying that repository copy.
+The application records the protocol timeline, operator actions, acquisition
+health, presentation timing, marker attempts, and raw EEG together so that a
+session can be inspected and validated after recording.
 
 ## Installation
 
-Create a 64-bit Python 3.11 environment. Although PsychoPy 2026.2.1 advertises
-Python 3.12 support, its mandatory Windows `pywinhook` dependency currently
-publishes binary wheels only through CPython 3.11. Python 3.12 therefore falls
-back to an unsupported SWIG/MSVC source build. Backend-only installation intentionally does
-not install PsychoPy:
+The supported environment is 64-bit Windows with Python 3.11. The package
+requires Python `>=3.11,<3.12`, and the PsychoPy subject dependency is pinned
+to `psychopy==2026.2.1`.
+
+From the project directory:
 
 ```powershell
 python -m pip install -e .
 ```
 
-Install the required surfaces separately or together:
+Install the application surfaces as needed:
 
 ```powershell
+# Operator UI
 python -m pip install -e ".[ui]"
-python -m pip install -e ".[subject]"       # psychopy==2026.2.1
+
+# PsychoPy subject UI
+python -m pip install -e ".[subject]"
+
+# BrainFlow, NumPy/SciPy, and LSL acquisition
 python -m pip install -e ".[acquisition]"
+
+# Everything, including development dependencies
 python -m pip install -e ".[all,dev]"
 ```
 
-## Commands
+The base installation supports configuration, planning, validation, and
+backend-only workflows. PsychoPy, PyQt6, and hardware integrations are
+installed through their optional dependencies.
+
+## Launch options
+
+The installed command is `imagined-speech-psychopy`:
+
+| Command | Purpose |
+|---|---|
+| `validate` | Validate an experiment YAML file and its referenced resources. |
+| `preview` | Show the protocol layout, balance, and projected duration. |
+| `simulate` | Run a session and write a package without a live subject UI. |
+| `run` | Launch the operator workflow and the PsychoPy subject display. |
+| `run-subject` | Launch a backend and subject process directly from CLI arguments. |
+| `validate-session <path>` | Validate and reconstruct a saved session package. |
+| `publish-lsl-synthetic` | Publish a real-time synthetic EEG stream over LSL. |
+
+The simplest option is to use `run` and do everything through the operator UI:
 
 ```powershell
-imagined-speech-psychopy validate
-imagined-speech-psychopy preview
-imagined-speech-psychopy simulate
 imagined-speech-psychopy run
-imagined-speech-psychopy run-subject
-imagined-speech-psychopy validate-session sessions/<session-directory>
-imagined-speech-psychopy publish-lsl-synthetic
 ```
 
-The bundled schema-3 configurations live under
-`src/imagined_speech/resources/configs`. Live commands reject schema-1/2
-configurations with a targeted migration error. `validate-session` continues
-to reconstruct historical schema-1/2 packages.
+The UI guides the operator through setup, subject initialization, protocol
+control, monitoring, and session completion.
 
-`cyton-four-phoneme.yaml` is the short hardware and protocol shakedown for the
-8-channel Cyton. It presents `/p/`, `/m/`, `/i/`, and `/u/` twice each across
-two balanced blocks. Each trial follows FIXATION (1 s), STIMULUS (5 s),
-FIXATION (1 s), THINKING (5 s), FIXATION (1 s), SPEAKING (5 s), REST (5 s),
-and a blank post-trial interval
-(1 s). The speaking phase displays the bundled mouth cue. Audio plays only
-during STIMULUS; the other trial stages are silent.
+Common session options are available on `simulate`, `run`, and `run-subject`:
 
-`simulate` defaults to a deterministic virtual clock and exercises the same
-presentation contract with a virtual driver. `run-subject` starts a backend
-and PsychoPy without Qt, creates one session from its CLI arguments, and starts
-automatically after acquisition readiness and timing preflight.
+```powershell
+imagined-speech-psychopy run `
+  --config src/imagined_speech/resources/configs/cyton-four-phoneme.yaml `
+  --participant P001 `
+  --session-label baseline-01 `
+  --output sessions
+```
 
-## Configuration and artifacts
+The common options are:
 
-Every live experiment requires `schema_version: 3`, explicit
-`protocol.experiment` and `protocol.practice` sections, and an explicit
-`presentation.psychopy` block. It defines monitor/window behavior, text and
-asset rendering, frame preflight and drop thresholds, IPC timing tolerance,
-acknowledgement timeout, and PTB audio settings. Device profiles remain schema
-version 1.
+- `--config PATH` — experiment YAML path;
+- `--participant ID` — participant identifier;
+- `--session-label LABEL` — human-readable session label; and
+- `--output PATH` — output root override.
 
-The experimenter display override uses the operating-system display device
-name, not the Qt list position. The PsychoPy process resolves that stable name
-against its own Pyglet display list and verifies the native window after it is
-created. A missing or mismatched display fails subject initialization instead
-of silently opening on the primary monitor. Supported window modes are
-`FULL_SCREEN`, `CENTER`, and `TOP_LEFT`; the old Qt-only
-`PREVIOUS_POSITION` mode is not supported and should be replaced with
-`CENTER` in external configurations. `--windowed` selects `CENTER`.
+Additional options:
 
-Bundled configurations use PsychoPy's installed `testMonitor` profile. A named
-calibration is loaded when it exists; otherwise presentation falls back to
-`testMonitor` and records both requested and resolved monitor names in the
-session metadata. Create a calibrated PsychoPy monitor profile for hardware
-acceptance and production data collection.
+- `simulate --clock virtual|real` selects deterministic or real-time execution;
+- `run-subject --clock real` selects real-time subject execution;
+- `run-subject --windowed` opens the subject display in a bounded window; and
+- `run-subject --screen INDEX` overrides the configured screen index.
 
-Schema-3 session packages include:
+The bundled configurations are under
+`src/imagined_speech/resources/configs`. The four-phoneme Cyton configuration
+uses `/p/`, `/m/`, `/i/`, and `/u/` across balanced blocks. The short smoke
+configuration is the default for validation and simulation.
 
-- `presentation-metadata.json` for resolved settings, preflight, audio, and
-  initial/final clock mappings;
-- `presentation-timing.jsonl` for requests, accepted/rejected acknowledgements,
-  operator-command lifecycle, protocol state snapshots, neutral gaps, backend
-  receive times, rejection details, and transport/marker latency;
-- `frame-intervals.csv` for real PsychoPy runs.
+## Operator features
 
-Practice is a separately marked stage. Set `protocol.practice.blocks` to `0`
-with no stimuli and zero repetitions to disable it, or to `1` for one recorded
-practice stage. After practice, the subject sees a neutral completion screen
-until the operator starts experiment block 1 or retries the final practice
-trial.
+The operator console has a setup scene and a protocol-control scene. It keeps
+the researcher in control of the recording while the subject sees only
+presentation content.
 
-`operator-actions.jsonl` also records engine state before and after every
-command, including presentation revision/ID, pending control, expected neutral
-acknowledgement ID, trial, attempt, and any protocol failure reason.
+<!-- Screenshots of the setup and protocol-control scenes will be added here. -->
 
-All declared artifacts are checksummed. Native EEG markers are attempted after
-the backend receives a flip acknowledgement; the persisted timing data records
-that delay instead of treating marker time as physical display onset.
+### Session setup
 
-The current architecture reference is
-[PsychoPy Process Architecture](docs/architecture/psychopy-process-architecture.md).
+Before creating a recording, the operator can configure and verify:
+
+- participant and session identifiers;
+- experiment and acquisition-device profiles;
+- output location and random seed;
+- subject display and window mode;
+- montage and audio readiness; and
+- the compiled protocol preview, duration, and validation warnings.
+
+Configuration is strict: unknown fields, invalid combinations, missing
+resources, unsupported display settings, and incompatible acquisition options
+are reported before recording begins.
+
+### Protocol control
+
+The protocol-control scene shows session, runtime, recording, protocol, phase,
+progress, and output status. The primary action is **Init subject UI**. After
+the subject connects and passes timing preflight, it becomes **Start protocol**.
+When practice blocks are configured and the practice stage finishes, the action
+becomes **Start experiment** so the operator explicitly begins the experiment
+stage.
+
+Available controls are:
+
+- start the protocol;
+- start the experiment stage when practice blocks are configured and complete;
+- pause and resume while acquisition continues;
+- repeat the current trial;
+- repeat the current block;
+- repeat the last practice trial;
+- record an electrode-adjustment note; and
+- abort the protocol and finalize the session.
+
+Recovery actions are recorded as operator commands and protocol events. They do
+not erase already-recorded EEG or event history.
+
+### Live monitoring
+
+The monitoring workspace is configurable through pane assignments and layouts.
+The available widgets are:
+
+- **Live EEG** — multichannel EEG traces;
+- **Channel reception** — received-channel status and sample information;
+- **Recent protocol markers** — recent semantic marker activity;
+- **Operator command audit** — accepted and rejected command records; and
+- **Acquisition and storage health** — recording, queue, source, and storage
+  health warnings.
+
+The operator can change layouts and pane assignments while recording continues.
+Monitoring consumes copied state and does not control or modify persisted EEG.
+
+### Session completion
+
+After completion, abort, or controlled failure, the operator can inspect the
+output path, export a session summary, return to setup, and begin another
+session. Declared artifacts are registered and checksummed. Session validation
+checks the manifest, event structure, plan reconstruction, acquisition data,
+and artifact consistency.
+
+## Application components and architecture
+
+The application is composed of four main runtime components:
+
+1. **Server/backend** — owns the session runtime, protocol state, acquisition
+   lifecycle, persistence, validation, and finalization.
+2. **Acquisition** — a backend-owned component that connects to synthetic,
+   BrainFlow, Cyton, replay, or LSL sources; reads samples; records raw data;
+   and reports health and markers.
+3. **Subject UI** — a PsychoPy process that renders presentation-safe protocol
+   state and acknowledges actual display flips.
+4. **Operator UI** — a PyQt6 process for setup, controls, monitoring widgets,
+   warnings, layouts, and session summaries.
+
+### Communication flow
+
+```mermaid
+flowchart LR
+    OP["Operator UI"] <-->|"Versioned JSON Lines over loopback"| SERVER["Server / backend"]
+    SUBJECT["Subject UI / PsychoPy"] <-->|"Presentation state and flip acknowledgements"| SERVER
+    ACQ["Acquisition"] -->|"EEG samples, markers, health"| SERVER
+    SERVER -->|"Events, timing, metadata, raw data"| STORAGE["Persistence storage"]
+    SERVER -->|"Operator state and warnings"| OP
+```
+
+The server binds to an ephemeral loopback TCP port. The operator and subject
+identify their roles when connecting. The server serializes runtime mutations
+so the UI processes cannot independently change protocol truth.
+
+### Recording lifecycle
+
+1. The operator loads and validates experiment and device configuration.
+2. The server creates a session identity and immutable plan snapshot.
+3. The acquisition source is prepared and recording starts, including pre-roll.
+4. The subject UI connects, resolves its display, and completes timing/audio
+   preflight.
+5. The operator starts the protocol. Subject presentation, EEG acquisition,
+   markers, events, and monitoring proceed together.
+6. The server records post-roll, stops acquisition, registers artifacts, writes
+   final metadata, and validates the session package.
+
+Visible presentation boundaries are committed by `Window.flip()` acknowledgements.
+The persisted timing records include subject flip time, backend receipt time,
+clock calibration, marker-attempt timing, frame intervals, and audio scheduling.
+
+## Experiment and data model
+
+Phase durations, stimuli, assets, repetitions, blocks, practice, marker codes,
+presentation, montage, acquisition, and output paths are explicit in YAML. A
+validated configuration is compiled into a deterministic plan before hardware
+or a session directory is opened.
+
+Supported acquisition paths are native synthetic, BrainFlow synthetic,
+BrainFlow replay, Cyton, and LSL. Persisted EEG is recorded as-is and does not
+go through processing before it is written.
+
+Session packages can contain:
+
+- configuration and compiled-plan snapshots;
+- `events.jsonl`, the authoritative semantic timeline;
+- `operator-actions.jsonl` and presentation timing records;
+- raw EEG, acquisition markers, health, and acquisition metadata;
+- `presentation-metadata.json`, frame intervals, and clock mappings; and
+- checksums for all declared artifacts.
