@@ -8,6 +8,7 @@ from imagined_speech.ipc.messages import SubjectDisplayTargetPayload
 from imagined_speech.presentation import renderer
 from imagined_speech.presentation.renderer import (
     DisplaySelectionError,
+    PsychopyRenderer,
     _set_text_if_changed,
     resolve_psychopy_display,
 )
@@ -17,6 +18,7 @@ class _Stimulus:
     def __init__(self, text: str) -> None:
         self._text = text
         self.assignments = 0
+        self.draws = 0
 
     @property
     def text(self) -> str:
@@ -26,6 +28,10 @@ class _Stimulus:
     def text(self, value: str) -> None:
         self.assignments += 1
         self._text = value
+
+    def draw(self) -> None:
+        self.assignments += 1
+        self.draws += 1
 
 
 def test_unchanged_text_does_not_rebuild_stimulus() -> None:
@@ -215,3 +221,66 @@ def test_native_monitor_mismatch_closes_window_and_fails(
         renderer.create_window(_window_config("FULL_SCREEN"), _target())
 
     assert _Window.created[-1].closed is True
+
+
+def test_fixation_draws_only_centered_cross() -> None:
+    renderer = object.__new__(PsychopyRenderer)
+    renderer.presentation = {"subject_style": "guided"}
+    renderer.fixation = _Stimulus("+")
+
+    renderer.draw({"screen": "fixation"}, remaining_seconds=1)
+
+    assert renderer.fixation.assignments == 1
+
+
+def test_minimal_phoneme_style_uses_only_phase_specific_cues() -> None:
+    renderer = object.__new__(PsychopyRenderer)
+    renderer.presentation = {"subject_style": "minimal_phoneme"}
+    renderer.fixation = _Stimulus("+")
+    renderer.minimal_text = _Stimulus("")
+    renderer.speaking_mouth = _Stimulus("")
+
+    renderer.draw({"screen": "stimulus", "headline": "/p/"})
+    assert renderer.minimal_text.text == "/p/"
+    assert renderer.minimal_text.draws == 1
+
+    renderer.draw({"screen": "fixation"})
+    renderer.draw({"screen": "speaking"})
+    assert renderer.fixation.draws == 1
+    assert renderer.speaking_mouth.draws == 1
+
+    draws_before_blank = (
+        renderer.minimal_text.draws,
+        renderer.fixation.draws,
+        renderer.speaking_mouth.draws,
+    )
+    renderer.draw({"screen": "thinking"})
+    renderer.draw({"screen": "post_trial"})
+    assert (
+        renderer.minimal_text.draws,
+        renderer.fixation.draws,
+        renderer.speaking_mouth.draws,
+    ) == draws_before_blank
+
+
+def test_minimal_phoneme_style_shows_countdown_except_during_silent_gap() -> None:
+    renderer = object.__new__(PsychopyRenderer)
+    renderer.presentation = {
+        "subject_style": "minimal_phoneme",
+        "show_countdown": True,
+    }
+    renderer.fixation = _Stimulus("+")
+    renderer.minimal_text = _Stimulus("")
+    renderer.speaking_mouth = _Stimulus("")
+    renderer.countdown = _Stimulus("")
+
+    renderer.draw({"screen": "thinking"}, remaining_seconds=4.2)
+    assert renderer.countdown.text == "5"
+    assert renderer.countdown.draws == 1
+
+    renderer.draw({"screen": "speaking"}, remaining_seconds=3.0)
+    assert renderer.countdown.text == "3"
+    assert renderer.countdown.draws == 2
+
+    renderer.draw({"screen": "post_trial"}, remaining_seconds=1.0)
+    assert renderer.countdown.draws == 2

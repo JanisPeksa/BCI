@@ -1,14 +1,24 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from imagined_speech.cli import default_config_path
 from imagined_speech.config import load_experiment
 from imagined_speech.runtime.clock import VirtualClock
-from imagined_speech.runtime.protocol import ProtocolEngine, RunState
+from imagined_speech.runtime.protocol import (
+    ProtocolEngine,
+    RunState,
+    _display_instruction,
+    _headline,
+    build_runtime_actions,
+)
 from imagined_speech.events import EventType, MemoryEventSink
 from imagined_speech.planning import compile_session_plan
 from imagined_speech.runtime.simulation import run_virtual
+
+
+RESOURCE_ROOT = Path(__file__).parents[2] / "src" / "imagined_speech" / "resources"
 
 
 def make_engine() -> tuple[ProtocolEngine, VirtualClock, MemoryEventSink]:
@@ -18,6 +28,36 @@ def make_engine() -> tuple[ProtocolEngine, VirtualClock, MemoryEventSink]:
     sink = MemoryEventSink()
     engine = ProtocolEngine("test-session", plan, resolved.config, clock, sink)
     return engine, clock, sink
+
+
+def test_fixation_phase_uses_cross_headline() -> None:
+    assert _headline("fixation", "/p/") == "+"
+    assert _display_instruction("fixation", "Prepare to speak") == ""
+
+
+def test_cyton_trial_runtime_order_includes_silent_post_trial_gap() -> None:
+    resolved = load_experiment(
+        RESOURCE_ROOT / "configs" / "cyton-four-phoneme.yaml"
+    )
+    plan = compile_session_plan(resolved.config)
+    screens = [
+        action.screen
+        for action in build_runtime_actions(plan)
+        if hasattr(action, "screen")
+    ]
+    first_stimulus = screens.index("stimulus")
+
+    first_fixation = first_stimulus - 1
+    assert screens[first_fixation : first_fixation + 8] == [
+        "fixation",
+        "stimulus",
+        "fixation",
+        "thinking",
+        "fixation",
+        "speaking",
+        "rest",
+        "post_trial",
+    ]
 
 
 def test_virtual_run_emits_complete_nested_sequence() -> None:

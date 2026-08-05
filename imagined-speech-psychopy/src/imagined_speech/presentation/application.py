@@ -146,6 +146,9 @@ def run_subject_process(host: str, port: int) -> int:
                     session_id = incoming.session_id
                     presentation = incoming.payload["presentation"]
                     assets = incoming.payload.get("assets", {})
+                    presentation_assets = incoming.payload.get(
+                        "presentation_assets", {}
+                    )
                     error = None
                     window = None
                     try:
@@ -153,7 +156,12 @@ def run_subject_process(host: str, port: int) -> int:
                             presentation["psychopy"],
                             incoming.payload.get("display_target"),
                         )
-                        renderer = PsychopyRenderer(window, presentation, assets)
+                        renderer = PsychopyRenderer(
+                            window,
+                            presentation,
+                            assets,
+                            presentation_assets,
+                        )
                         audio = AudioScheduler(
                             presentation["audio"]["enabled"],
                             presentation["audio"]["volume"],
@@ -213,8 +221,8 @@ def run_subject_process(host: str, port: int) -> int:
                         active = requested
                         successor = requested_successor
                         revision = incoming.revision
-                        audio_time, audio_started = audio.schedule(
-                            active.get("stimulus_id") if active else None,
+                        audio_time, audio_started = audio.transition(
+                            active,
                             renderer.window,
                         ) if audio else (None, False)
                         renderer.draw(active)
@@ -248,6 +256,8 @@ def run_subject_process(host: str, port: int) -> int:
                 elif incoming.type == MessageType.PRESENTATION_INTERRUPT:
                     if renderer is not None and session_id is not None:
                         previous = active.get("presentation_id") if active else None
+                        if audio:
+                            audio.stop_all()
                         renderer.draw(None)
                         flip_time = renderer.neutral()
                         frame_intervals, frame_interval_cursor = _intervals_since(
@@ -259,8 +269,6 @@ def run_subject_process(host: str, port: int) -> int:
                         active = None
                         successor = None
                         revision = incoming.revision
-                        if audio:
-                            audio.stop_all()
                         _ack(
                             client,
                             session_id=session_id,
@@ -293,8 +301,8 @@ def run_subject_process(host: str, port: int) -> int:
                     previous = active.get("presentation_id")
                     active = successor
                     successor = None
-                    audio_time, audio_started = audio.schedule(
-                        active.get("stimulus_id") if active else None,
+                    audio_time, audio_started = audio.transition(
+                        active,
                         renderer.window,
                     ) if audio else (None, False)
                     renderer.draw(active)

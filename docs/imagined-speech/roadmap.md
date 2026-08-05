@@ -35,18 +35,17 @@ Establish the scientific and software contracts before building the runtime.
   - marker codes, QC settings, and output paths.
 - Supply:
   - a short, hardware-free smoke configuration;
-  - full `imagined_only` and `feis_comparable` configurations;
+  - a short `heard_imagined_spoken` Cyton configuration;
   - synthetic, replay, and Cyton device profiles.
-- Use the 16 FEIS phonemes `/p t k f s ʃ v z ʒ m n ŋ i u æ ɔ/`, ten
-  repetitions each, giving 160 trials. The source's isolated "6 phonemes"
-  wording is treated as a typo because its table contains 16 and the
-  experiment reports 160 trials. [FEIS paper][feis-paper]
-- Default full protocol:
-  - four blocks of 40 trials;
-  - four 5-second phases per trial;
+- Start with `/p/`, `/m/`, `/i/`, and `/u/` to validate the complete Cyton
+  recording procedure before increasing vocabulary or repetitions.
+- Cyton shakedown protocol:
+  - two balanced blocks of four recorded trials;
+  - 5-second stimulus, thinking, speaking, and rest phases;
+  - three 1-second fixation periods and a 1-second post-trial interval;
   - four practice trials;
-  - 60-second initial rest, final rest, and inter-block breaks;
-  - projected runtime of approximately 59 minutes 40 seconds.
+  - 5-second initial rest, final rest, and inter-block break;
+  - projected runtime of approximately 5 minutes 3 seconds.
 - Define a provisional Cyton montage of `F3, F4, C3, C4, T7, T8, P3, P4`,
   with reference and ground recorded separately and the entire profile
   configurable.
@@ -54,8 +53,7 @@ Establish the scientific and software contracts before building the runtime.
   balance, phase order, assets, and projected duration.
 
 **Complete when:** all supplied configurations validate, the smoke profile
-requires no EEG hardware or audio, and both full profiles preview as balanced
-40–60 minute sessions.
+requires no EEG hardware or audio, and the Cyton profile previews as balanced.
 
 ## Milestone 2 — Reproducible Simulated Experiment
 
@@ -67,9 +65,9 @@ and session persistence without EEG.
   identifiers.
 - Use deterministic seeded randomization. Identical configuration and seed
   must produce the same plan.
-- Implement canonical phase sequences:
+- Declare phase sequences in each experiment configuration:
   - `imagined_only`: REST → STIMULUS → THINKING → PAUSE.
-  - `feis_comparable`: REST → STIMULUS → THINKING → SPEAKING.
+  - `heard_imagined_spoken`: FIXATION → STIMULUS → FIXATION → THINKING → FIXATION → SPEAKING → REST → POST-TRIAL.
 - Build a monotonic-clock state machine independent of Qt timers. Provide
   real-time and fast virtual-clock runners.
 - Define `ProtocolEvent` with sequence number, event and marker codes,
@@ -94,7 +92,7 @@ and session persistence without EEG.
 - Add session validation that reconstructs every block, trial, attempt, and
   phase from events.
 
-**Complete when:** both profiles run visually with a virtual or real clock and
+**Complete when:** the smoke and Cyton profiles run visually with a virtual or real clock and
 produce deterministic, reconstructable session packages without EEG hardware.
 
 ## Milestone 3 — EEG Acquisition and Synchronization
@@ -239,8 +237,8 @@ Validate the whole platform under realistic operating conditions.
   - fast synthetic smoke tests;
   - recorded replay sessions;
   - short Cyton calibration;
-  - full imagined-only and FEIS-comparable blocks;
-  - a complete 40–60 minute pilot.
+  - heard-imagined-spoken Cyton blocks;
+  - a complete short pilot.
 - Exercise disconnection, missing audio, loose electrodes, movement, muscle
   activity, pause/resume, repeats, refit, abort, application failure, and
   disk/output errors.
@@ -279,5 +277,3 @@ obtain an interpretable research package.
 - Every milestone adds a repeatable smoke command and acceptance checklist.
 - CNN classification, learned QC, direct spelling, cloud services, and
   destructive online EEG preprocessing remain outside the initial roadmap.
-
-[feis-paper]: https://www.isca-archive.org/interspeech_2020/clayton20_interspeech.pdf

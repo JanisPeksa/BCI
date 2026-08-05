@@ -1,0 +1,58 @@
+schema_version: 2
+experiment_id: cyton_four_phoneme
+title: Cyton Four-Phoneme Heard-Imagined-Spoken Session
+profile: heard_imagined_spoken
+random_seed: 20260805
+device_profile: ../devices/cyton.yaml
+protocol:
+  sequence: [fixation, stimulus, fixation, thinking, fixation, speaking, rest]
+  blocks: 2
+  repetitions_per_stimulus: 2
+  practice_stimulus_ids: [p, m, i, u]
+  practice_repetitions_per_stimulus: 1
+  initial_rest_seconds: 5
+  final_rest_seconds: 5
+  inter_block_break_seconds: 5
+  post_trial_seconds: 1
+phases:
+  stimulus: {duration_seconds: 5, instruction: Listen to the phoneme repeated five times}
+  thinking: {duration_seconds: 5, instruction: Imagine repeating the phoneme five times without moving}
+  fixation: {duration_seconds: 1, instruction: Fixate on the cross}
+  speaking: {duration_seconds: 5, instruction: Speak the phoneme five times at the same rhythm}
+  rest: {duration_seconds: 5, instruction: REST}
+stimuli:
+  - {id: p, label: /p/, audio: ../audio/four-phoneme/p-5x.wav}
+  - {id: m, label: /m/, audio: ../audio/four-phoneme/m-5x.wav}
+  - {id: i, label: /i/, audio: ../audio/four-phoneme/i-5x.wav}
+  - {id: u, label: /u/, audio: ../audio/four-phoneme/u-5x.wav}
+presentation:
+  subject_style: minimal_phoneme
+  speaking_image: ../images/mouth.png
+  show_countdown: true
+  show_progress: false
+  audio: {enabled: true, volume: 0.8, require_all_stimuli: true}
+  psychopy:
+    monitor_name: testMonitor
+    gamma: 1.0
+    refresh_rate_hz: 60
+    screen_index: 1
+    window_mode: FULL_SCREEN
+    window_size_px: null
+    hide_cursor: true
+    use_retina: true
+    check_timing: true
+    wait_blanking: true
+    text: {font: Arial, headline_height_px: 80, instruction_height_px: 30, progress_height_px: 22, countdown_height_px: 34, primary_color: "#f5f7fa", muted_color: "#aeb6c4", accent_color: "#9dc1ff"}
+    assets: {max_width_px: 900, max_height_px: 500, interpolate: true}
+    preflight_warmup_frames: 10
+    preflight_frame_count: 120
+    refresh_rate_tolerance_hz: 0.5
+    max_frame_interval_factor: 1.5
+    max_dropped_frame_fraction: 0.01
+    max_ipc_rtt_ms: 25
+    frame_ack_timeout_seconds: 2
+    require_timing_quality: false
+    audio_backend: ptb
+    audio_latency_mode: 3
+qc: {enabled: false, line_frequency_hz: 50}
+output: {root_dir: ../../../../sessions}

@@ -264,7 +264,13 @@ def _set_text_if_changed(stimulus, text: str) -> None:
 
 
 class PsychopyRenderer:
-    def __init__(self, window, presentation: dict, assets: dict[str, dict[str, str]]) -> None:
+    def __init__(
+        self,
+        window,
+        presentation: dict,
+        assets: dict[str, dict[str, str]],
+        presentation_assets: dict[str, str] | None = None,
+    ) -> None:
         from psychopy import visual
 
         self.window = window
@@ -281,6 +287,54 @@ class PsychopyRenderer:
             pos=(0, 120),
             wrapWidth=window.size[0] * 0.85,
         )
+        self.fixation = visual.TextStim(
+            window,
+            text="+",
+            height=style["headline_height_px"],
+            color=style["primary_color"],
+            font=style["font"],
+            pos=(0, 0),
+        )
+        self.minimal_text = visual.TextStim(
+            window,
+            text="",
+            height=style["headline_height_px"],
+            color=style["primary_color"],
+            font=style["font"],
+            pos=(0, 0),
+        )
+        speaking_image = (presentation_assets or {}).get("speaking_image")
+        if speaking_image:
+            self.speaking_mouth = visual.ImageStim(
+                window,
+                image=str(Path(speaking_image)),
+                interpolate=bool(psycho["assets"]["interpolate"]),
+            )
+            width, height = (float(value) for value in self.speaking_mouth.size)
+            scale = min(
+                1.0,
+                float(psycho["assets"]["max_width_px"]) / width,
+                float(psycho["assets"]["max_height_px"]) / height,
+            )
+            self.speaking_mouth.size = (width * scale, height * scale)
+        else:
+            self.speaking_mouth = visual.ShapeStim(
+                window,
+                vertices=(
+                    (-140, 0),
+                    (-70, 48),
+                    (0, 58),
+                    (70, 48),
+                    (140, 0),
+                    (70, -48),
+                    (0, -58),
+                    (-70, -48),
+                ),
+                closeShape=True,
+                lineColor=style["primary_color"],
+                fillColor=None,
+                lineWidth=6,
+            )
         self.instruction = visual.TextStim(
             window,
             text="",
@@ -328,6 +382,32 @@ class PsychopyRenderer:
     def draw(self, view: dict | None, remaining_seconds: float | None = None) -> None:
         if view is None:
             return
+        if self.presentation.get("subject_style") == "minimal_phoneme":
+            screen = view.get("screen")
+            if screen == "fixation":
+                self.fixation.draw()
+            elif screen == "speaking":
+                self.speaking_mouth.draw()
+            elif screen in {"stimulus", "rest"}:
+                _set_text_if_changed(
+                    self.minimal_text,
+                    str(view.get("headline", "")),
+                )
+                self.minimal_text.draw()
+            if screen != "post_trial":
+                self._draw_countdown(remaining_seconds)
+            if screen in {
+                "fixation",
+                "speaking",
+                "stimulus",
+                "rest",
+                "thinking",
+                "post_trial",
+            }:
+                return
+        if view.get("screen") == "fixation":
+            self.fixation.draw()
+            return
         _set_text_if_changed(self.headline, str(view.get("headline", "")))
         _set_text_if_changed(self.instruction, str(view.get("instruction", "")))
         self.headline.draw()
@@ -342,6 +422,9 @@ class PsychopyRenderer:
                 f"Trial {view['trial_number']}/{view.get('trial_count') or '?'}",
             )
             self.progress.draw()
+        self._draw_countdown(remaining_seconds)
+
+    def _draw_countdown(self, remaining_seconds: float | None) -> None:
         if self.presentation.get("show_countdown") and remaining_seconds is not None:
             _set_text_if_changed(
                 self.countdown,

@@ -61,6 +61,7 @@ def load_experiment(path: str | Path) -> ResolvedExperiment:
     device_path = _resolve_path(config.device_profile, config_path.parent)
     device = load_device_profile(device_path)
     assets: dict[str, dict[str, Path]] = {}
+    presentation_assets: dict[str, Path] = {}
     missing_assets: list[Path] = []
     for stimulus in config.stimuli:
         resolved: dict[str, Path] = {}
@@ -80,6 +81,14 @@ def load_experiment(path: str | Path) -> ResolvedExperiment:
             )
         assets[stimulus.id] = resolved
 
+    if config.presentation.speaking_image is not None:
+        speaking_image = _resolve_path(
+            config.presentation.speaking_image, config_path.parent
+        )
+        presentation_assets["speaking_image"] = speaking_image
+        if not speaking_image.is_file():
+            missing_assets.append(speaking_image)
+
     if missing_assets:
         paths = "\n".join(f"- {asset}" for asset in missing_assets)
         raise ConfigurationError(f"referenced assets do not exist:\n{paths}")
@@ -89,6 +98,7 @@ def load_experiment(path: str | Path) -> ResolvedExperiment:
         device=device,
         device_path=device_path,
         assets=assets,
+        presentation_assets=presentation_assets,
     )
 
 

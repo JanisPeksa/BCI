@@ -24,6 +24,7 @@ class TrialPlan(StrictModel):
     stimulus_id: str
     stimulus_label: str
     phases: tuple[PhaseStep, ...]
+    post_trial_seconds: float = Field(default=0, ge=0)
 
 
 class RestPlan(StrictModel):
@@ -93,9 +94,9 @@ class SessionPlan(StrictModel):
         for item in self.items:
             if isinstance(item, BlockPlan):
                 total += sum(
-                    phase.duration_seconds
+                    sum(phase.duration_seconds for phase in trial.phases)
+                    + trial.post_trial_seconds
                     for trial in item.trials
-                    for phase in trial.phases
                 )
             else:
                 total += item.duration_seconds

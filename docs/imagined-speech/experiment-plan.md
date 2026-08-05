@@ -2,14 +2,14 @@
 
 ## Summary
 
-Build `imagined-speech` as a configurable research application modeled on the FEIS recording procedure, while selectively reusing acquisition and timing patterns from `mind-speech-interface-ssvep`.
+Build `imagined-speech` as a configurable research application modeled on a published heard-imagined-spoken phoneme procedure, while selectively reusing acquisition and timing patterns from `mind-speech-interface-ssvep`.
 
-The first study targets a balanced phoneme benchmark rather than direct alphabet spelling. FEIS used 160 randomized trials, four 5-second phases, 14 channels at 256 Hz, and approximately 60 minutes per participant. Its subject-dependent SVM performed above chance, while its CNN required more data. [Clayton et al.](https://www.isca-archive.org/interspeech_2020/clayton20_interspeech.pdf)
+The first study targets a small phoneme benchmark rather than direct alphabet spelling. The published reference used a larger 14-channel, 256 Hz setup; this project intentionally uses four phonemes and the 8-channel, 250 Hz Cyton. [Clayton et al.](https://www.isca-archive.org/interspeech_2020/clayton20_interspeech.pdf)
 
 Support two configurable protocol modes:
 
 - `imagined_only`: REST -> CUE/STIMULUS -> THINKING -> PAUSE
-- `feis_comparable`: REST -> STIMULI -> THINKING -> SPEAKING
+- `heard_imagined_spoken`: FIXATION -> STIMULUS -> FIXATION -> THINKING -> FIXATION -> SPEAKING -> REST -> POST-TRIAL
 
 The overt-speaking phase is optional and primarily serves verification and alignment.
 
@@ -55,16 +55,16 @@ The default session fits within 40-60 minutes: headset fit verification, baselin
 
 Use automated tests for deterministic, hardware-independent behavior such as configuration validation, protocol planning, event ordering, session reconstruction, synthetic/replay acquisition, and QC algorithms. Validate Qt presentation, multimedia, real Cyton acquisition, physical artifact conditions, and two-display operation manually.
 
-The operator verifies both protocol modes; correct subject and experimenter displays; EEG and marker recording; pause/resume/repeat/abort behavior; asynchronous QC while recording continues; useful warnings and logged actions; valid offline session loading; and a practical 40-60 minute total duration.
+The operator verifies the Cyton heard-imagined-spoken protocol; correct subject and experimenter displays; EEG and marker recording; pause/resume/repeat/abort behavior; asynchronous QC while recording continues; useful warnings and logged actions; and valid offline session loading.
 
-The acceptance run includes a synthetic/replay dry run, short real-hardware calibration, imagined-only and FEIS-comparable blocks, intentional loose-electrode/movement/muscle-noise conditions, control recovery scenarios, and inspection of saved EEG, markers, metadata, QC events, and operator log.
+The acceptance run includes a synthetic/replay dry run, short real-hardware calibration, heard-imagined-spoken Cyton blocks, intentional loose-electrode/movement/muscle-noise conditions, control recovery scenarios, and inspection of saved EEG, markers, metadata, QC events, and operator log.
 
 The application is accepted when a researcher can conduct the complete session without code changes, recognize unacceptable quality, recover or repeat a block, and obtain a complete, interpretable recording package.
 
 ## Assumptions
 
-- The initial scientific target is a FEIS-style phoneme benchmark; letter spelling is a later protocol profile.
-- Both protocol modes are required from the beginning.
+- The initial scientific target is a simple four-phoneme Cyton benchmark; letter spelling is a later protocol profile.
+- The four-phoneme heard-imagined-spoken session is the only current hardware experiment.
 - Raw EEG is never altered by online QC.
 - Algorithmic QC is the initial scope; ML QC is a later extension.
 - Existing SSVEP code is reused selectively, while `imagined-speech` has its own package and data contracts.

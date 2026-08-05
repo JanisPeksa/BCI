@@ -16,10 +16,13 @@ def render_preview(resolved: ResolvedExperiment) -> str:
     config = resolved.config
     audio_assets = sum("audio" in assets for assets in resolved.assets.values())
     image_assets = sum("image" in assets for assets in resolved.assets.values())
+    image_assets += int("speaking_image" in resolved.presentation_assets)
     phases = " -> ".join(
         f"{phase.value.upper()} ({config.phases[phase].duration_seconds:g}s)"
         for phase in config.phase_sequence
     )
+    if config.protocol.post_trial_seconds > 0:
+        phases += f" -> POST_TRIAL ({config.protocol.post_trial_seconds:g}s)"
     break_count = max(0, config.protocol.blocks - 1)
     audio_state = "enabled" if config.presentation.audio.enabled else "disabled"
 

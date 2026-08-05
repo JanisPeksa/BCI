@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
@@ -72,11 +72,19 @@ def _headline(screen: str, stimulus_label: str | None = None) -> str:
         return stimulus_label or "STIMULUS"
     return {
         Phase.REST.value: "REST",
+        Phase.FIXATION.value: "+",
         Phase.THINKING.value: "THINKING",
         Phase.PAUSE.value: "PAUSE",
         Phase.SPEAKING.value: "SPEAKING",
+        "post_trial": "",
         "break": "BREAK",
     }.get(screen, screen.upper())
+
+
+def _display_instruction(screen: str, instruction: str) -> str:
+    if screen in {Phase.FIXATION.value, "post_trial"}:
+        return ""
+    return instruction
 
 
 def _trial_runtime_actions(
@@ -127,6 +135,17 @@ def _trial_runtime_actions(
             )
         )
         actions.append(_EventAction(EventType.PHASE_ENDED, phase_context))
+    if trial.post_trial_seconds > 0:
+        actions.append(
+            _TimedAction(
+                screen="post_trial",
+                duration_seconds=trial.post_trial_seconds,
+                context=replace(
+                    trial_context,
+                    step_id=f"{trial.trial_id}-post-trial",
+                ),
+            )
+        )
     actions.append(_EventAction(EventType.TRIAL_ENDED, trial_context))
     return actions
 
@@ -460,7 +479,7 @@ class ProtocolEngine:
             screen=self._current.screen,
             step_id=context.step_id,
             headline=_headline(self._current.screen, context.stimulus_label),
-            instruction=context.instruction,
+            instruction=_display_instruction(self._current.screen, context.instruction),
             stimulus_id=context.stimulus_id,
             stimulus_label=context.stimulus_label,
             remaining_seconds=self.remaining_seconds,
@@ -1128,7 +1147,7 @@ class FrameLockedProtocolEngine(ProtocolEngine):
             screen=action.screen,
             step_id=context.step_id,
             headline=_headline(action.screen, context.stimulus_label),
-            instruction=context.instruction,
+            instruction=_display_instruction(action.screen, context.instruction),
             stimulus_id=context.stimulus_id,
             stimulus_label=context.stimulus_label,
             remaining_seconds=(

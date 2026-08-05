@@ -1,3 +1,4 @@
+import wave
 from copy import deepcopy
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from imagined_speech.config import (
     ConfigurationError,
     Phase,
     PresentationConfig,
+    SubjectPresentationStyle,
     SubjectWindowMode,
     load_device_profile,
     load_experiment,
@@ -20,23 +22,47 @@ from imagined_speech.planning.preview import format_duration
 RESOURCE_ROOT = Path(__file__).parents[2] / "src" / "imagined_speech" / "resources"
 
 
-@pytest.mark.parametrize(
-    ("name", "phase", "duration"),
-    [
-        ("imagined_only.yaml", Phase.PAUSE, "00:59:40"),
-        ("feis_comparable.yaml", Phase.SPEAKING, "00:59:40"),
-    ],
-)
-def test_full_profiles_are_balanced(name: str, phase: Phase, duration: str) -> None:
-    resolved = load_experiment(RESOURCE_ROOT / "configs" / name)
+def test_cyton_four_phoneme_profile_is_short_and_uses_five_repeat_audio() -> None:
+    resolved = load_experiment(
+        RESOURCE_ROOT / "configs" / "cyton-four-phoneme.yaml"
+    )
 
-    assert len(resolved.config.stimuli) == 16
-    assert resolved.config.recorded_trials == 160
-    assert resolved.config.trials_per_block == 40
+    assert resolved.device.backend == "cyton"
+    assert resolved.device.sampling_rate_hz == 250
+    assert [stimulus.id for stimulus in resolved.config.stimuli] == ["p", "m", "i", "u"]
+    assert resolved.config.phase_sequence == (
+        Phase.FIXATION,
+        Phase.STIMULUS,
+        Phase.FIXATION,
+        Phase.THINKING,
+        Phase.FIXATION,
+        Phase.SPEAKING,
+        Phase.REST,
+    )
+    assert resolved.config.phases[Phase.FIXATION].duration_seconds == 1
+    assert resolved.config.protocol.post_trial_seconds == 1
+    assert resolved.config.recorded_trials == 8
+    assert resolved.config.trials_per_block == 4
     assert resolved.config.practice_trials == 4
-    assert phase in resolved.config.phase_sequence
-    assert format_duration(resolved.config.projected_duration_seconds) == duration
-    assert len(resolved.device.eeg_channels) == 8
+    assert format_duration(resolved.config.projected_duration_seconds) == "00:05:03"
+    assert (
+        resolved.config.presentation.subject_style
+        == SubjectPresentationStyle.MINIMAL_PHONEME
+    )
+    assert resolved.config.presentation.show_countdown is True
+    assert resolved.presentation_assets["speaking_image"] == (
+        RESOURCE_ROOT / "images" / "mouth.png"
+    ).resolve()
+    assert resolved.config.presentation.audio.enabled is True
+    assert resolved.config.presentation.audio.require_all_stimuli is True
+
+    for stimulus_assets in resolved.assets.values():
+        audio_path = stimulus_assets["audio"]
+        with wave.open(str(audio_path), "rb") as recording:
+            assert recording.getnchannels() == 1
+            assert recording.getsampwidth() == 2
+            assert recording.getframerate() == 44_100
+            assert recording.getnframes() == 5 * 44_100
 
 
 def test_smoke_profile_is_hardware_and_asset_independent() -> None:
@@ -46,6 +72,7 @@ def test_smoke_profile_is_hardware_and_asset_independent() -> None:
     assert resolved.config.presentation.psychopy.window_mode == SubjectWindowMode.FULL_SCREEN
     assert resolved.config.presentation.audio.enabled is False
     assert all(not assets for assets in resolved.assets.values())
+    assert resolved.presentation_assets == {}
     assert format_duration(resolved.config.projected_duration_seconds) == "00:00:14"
 
 
@@ -101,6 +128,33 @@ def test_device_profiles_validate(name: str, backend: str) -> None:
 
     assert profile.backend == backend
     assert len(profile.eeg_channels) == 8
+
+
+def test_protocol_sequence_is_configured_and_allows_repeated_phases(
+    tmp_path: Path,
+) -> None:
+    data = yaml.safe_load(default_config_path().read_text(encoding="utf-8"))
+    data["device_profile"] = str(
+        (RESOURCE_ROOT / "devices" / "synthetic.yaml").resolve()
+    )
+    data["protocol"]["sequence"] = ["fixation", "stimulus", "fixation"]
+    data["phases"] = {
+        "fixation": {"duration_seconds": 1, "instruction": "Fixate"},
+        "stimulus": {"duration_seconds": 1, "instruction": "Observe"},
+    }
+    target = tmp_path / "configured-sequence.yaml"
+    target.write_text(
+        yaml.safe_dump(data, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    resolved = load_experiment(target)
+
+    assert resolved.config.phase_sequence == (
+        Phase.FIXATION,
+        Phase.STIMULUS,
+        Phase.FIXATION,
+    )
 
 
 def test_missing_enabled_asset_is_rejected(tmp_path: Path) -> None:

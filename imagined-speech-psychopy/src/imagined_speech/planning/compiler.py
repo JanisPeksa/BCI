@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from collections import Counter
 from typing import Literal
 
-from imagined_speech.config import ExperimentConfig, StimulusConfig
+from imagined_speech.config import ExperimentConfig, Phase, StimulusConfig
 from imagined_speech.planning.models import (
     BlockPlan,
     BreakPlan,
@@ -27,15 +28,23 @@ def config_fingerprint(config: ExperimentConfig) -> str:
 
 
 def _phase_steps(config: ExperimentConfig, trial_id: str) -> tuple[PhaseStep, ...]:
-    return tuple(
-        PhaseStep(
-            step_id=f"{trial_id}-phase-{phase.value}",
-            phase=phase,
-            duration_seconds=config.phases[phase].duration_seconds,
-            instruction=config.phases[phase].instruction,
+    totals: Counter[Phase] = Counter(config.phase_sequence)
+    occurrences: Counter[Phase] = Counter()
+    steps: list[PhaseStep] = []
+    for phase in config.phase_sequence:
+        occurrences[phase] += 1
+        occurrence = (
+            f"-{occurrences[phase]}" if totals[phase] > 1 else ""
         )
-        for phase in config.phase_sequence
-    )
+        steps.append(
+            PhaseStep(
+                step_id=f"{trial_id}-phase-{phase.value}{occurrence}",
+                phase=phase,
+                duration_seconds=config.phases[phase].duration_seconds,
+                instruction=config.phases[phase].instruction,
+            )
+        )
+    return tuple(steps)
 
 
 def _practice_stimuli(config: ExperimentConfig) -> list[StimulusConfig]:
@@ -86,6 +95,7 @@ def _make_block(
             stimulus_id=stimulus.id,
             stimulus_label=stimulus.label,
             phases=_phase_steps(config, trial_id),
+            post_trial_seconds=config.protocol.post_trial_seconds,
         ))
     return BlockPlan(
         block_id=block_id,

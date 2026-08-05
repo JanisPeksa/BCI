@@ -40,10 +40,10 @@ experiment/device/session contracts.
 `ExperimentConfig` groups:
 
 - identity: `experiment_id`, title, schema version;
-- protocol: `imagined_only` or `feis_comparable`, random seed, block/repetition
+- protocol: an explicit ordered phase sequence, random seed, block/repetition
   design, practice, rests, and breaks;
-- phase definitions: positive duration and instruction for each phase required
-  by the selected profile;
+- phase definitions: positive duration and instruction for each phase used by
+  the protocol sequence;
 - stimuli: stable ID, display label, and optional image/audio paths;
 - presentation: subject-window mode/display selection, countdown/progress,
   audio;
@@ -85,7 +85,7 @@ Validation checks more than individual value types:
 - stimulus and device channel IDs/labels must be unique;
 - practice stimulus IDs must exist and practice stimuli/repetition count must
   be enabled together;
-- the phase mapping must exactly match the profile's canonical sequence;
+- the phase mapping must exactly match the phases named by `protocol.sequence`;
 - recorded trials must divide evenly across blocks;
 - marker codes must be positive and fixed codes must not collide;
 - generated stimulus marker codes must not overlap fixed event codes;
@@ -93,15 +93,16 @@ Validation checks more than individual value types:
 - LSL requires at least a stream name or stream type;
 - configured assets must exist when their presentation settings require them.
 
-The two canonical phase sequences are:
+The bundled configurations currently use:
 
 | Profile | Sequence |
 |---|---|
 | `imagined_only` | REST → STIMULUS → THINKING → PAUSE |
-| `feis_comparable` | REST → STIMULUS → THINKING → SPEAKING |
+| `heard_imagined_spoken` | FIXATION → STIMULUS → FIXATION → THINKING → FIXATION → SPEAKING → REST → POST-TRIAL |
 
-Phase order is therefore a protocol-level contract, not arbitrary runtime
-ordering supplied by the UI.
+Phase order is declared directly in `protocol.sequence`. A phase may appear
+more than once; the compiler gives each occurrence a unique step ID. The
+runtime executes the persisted sequence and the UI does not reorder it.
 
 ## Path resolution
 
@@ -172,7 +173,8 @@ immutable mappings.
 
 ## Bundled profiles
 
-The package includes full imagined-only and FEIS-comparable designs, plus short
+The package includes a short four-phoneme Cyton design with five-repeat audio
+stimuli, plus short
 smoke configurations for native synthetic, BrainFlow synthetic, and LSL paths.
 Device profiles cover native deterministic synthetic, BrainFlow synthetic,
 BrainFlow replay, Cyton, and LSL. The native synthetic smoke profile is the CLI

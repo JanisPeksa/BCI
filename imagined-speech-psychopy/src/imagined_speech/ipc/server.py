@@ -298,6 +298,10 @@ class BackendService:
                     stimulus_id: {name: str(path) for name, path in values.items()}
                     for stimulus_id, values in resolved.assets.items()
                 },
+                "presentation_assets": {
+                    name: str(path)
+                    for name, path in resolved.presentation_assets.items()
+                },
                 "display_target": (
                     payload.subject_display.model_dump(mode="json")
                     if payload.subject_display is not None

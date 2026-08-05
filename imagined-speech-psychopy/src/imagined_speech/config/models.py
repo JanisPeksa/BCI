@@ -20,12 +20,13 @@ class StrictModel(BaseModel):
 
 class ProtocolProfile(StrEnum):
     IMAGINED_ONLY = "imagined_only"
-    FEIS_COMPARABLE = "feis_comparable"
+    HEARD_IMAGINED_SPOKEN = "heard_imagined_spoken"
 
 
 class Phase(StrEnum):
     REST = "rest"
     STIMULUS = "stimulus"
+    FIXATION = "fixation"
     THINKING = "thinking"
     PAUSE = "pause"
     SPEAKING = "speaking"
@@ -37,20 +38,9 @@ class SubjectWindowMode(StrEnum):
     CENTER = "CENTER"
 
 
-PHASE_SEQUENCES: dict[ProtocolProfile, tuple[Phase, ...]] = {
-    ProtocolProfile.IMAGINED_ONLY: (
-        Phase.REST,
-        Phase.STIMULUS,
-        Phase.THINKING,
-        Phase.PAUSE,
-    ),
-    ProtocolProfile.FEIS_COMPARABLE: (
-        Phase.REST,
-        Phase.STIMULUS,
-        Phase.THINKING,
-        Phase.SPEAKING,
-    ),
-}
+class SubjectPresentationStyle(StrEnum):
+    GUIDED = "guided"
+    MINIMAL_PHONEME = "minimal_phoneme"
 
 
 class StimulusConfig(StrictModel):
@@ -66,6 +56,7 @@ class PhaseConfig(StrictModel):
 
 
 class ProtocolDesign(StrictModel):
+    sequence: tuple[Phase, ...] = Field(min_length=1)
     blocks: int = Field(ge=1)
     repetitions_per_stimulus: int = Field(ge=1)
     practice_stimulus_ids: tuple[str, ...] = ()
@@ -73,6 +64,7 @@ class ProtocolDesign(StrictModel):
     initial_rest_seconds: float = Field(default=0, ge=0)
     final_rest_seconds: float = Field(default=0, ge=0)
     inter_block_break_seconds: float = Field(default=0, ge=0)
+    post_trial_seconds: float = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_practice(self) -> "ProtocolDesign":
@@ -155,6 +147,8 @@ class PsychopyConfig(StrictModel):
 
 class PresentationConfig(StrictModel):
     psychopy: PsychopyConfig
+    subject_style: SubjectPresentationStyle = SubjectPresentationStyle.GUIDED
+    speaking_image: Path | None = None
     show_countdown: bool = True
     show_progress: bool = True
     audio: AudioConfig = AudioConfig()
@@ -176,6 +170,7 @@ class MarkerConfig(StrictModel):
         Phase.THINKING: 42,
         Phase.PAUSE: 43,
         Phase.SPEAKING: 44,
+        Phase.FIXATION: 45,
     }
     operator_pause: int = 50
     operator_resume: int = 51
@@ -189,6 +184,7 @@ class MarkerConfig(StrictModel):
         Phase.THINKING: 62,
         Phase.PAUSE: 63,
         Phase.SPEAKING: 64,
+        Phase.FIXATION: 65,
     }
     stimulus_base: int = Field(default=1000, ge=1)
 
@@ -271,7 +267,10 @@ class ExperimentConfig(StrictModel):
                 details.append("missing " + ", ".join(missing))
             if unexpected:
                 details.append("unexpected " + ", ".join(unexpected))
-            raise ValueError("phase definitions do not match profile: " + "; ".join(details))
+            raise ValueError(
+                "phase definitions do not match protocol sequence: "
+                + "; ".join(details)
+            )
 
         if self.recorded_trials % self.protocol.blocks != 0:
             raise ValueError("recorded trial count must divide evenly across blocks")
@@ -305,7 +304,7 @@ class ExperimentConfig(StrictModel):
 
     @property
     def phase_sequence(self) -> tuple[Phase, ...]:
-        return PHASE_SEQUENCES[self.profile]
+        return self.protocol.sequence
 
     @property
     def recorded_trials(self) -> int:
@@ -324,7 +323,10 @@ class ExperimentConfig(StrictModel):
 
     @property
     def trial_duration_seconds(self) -> float:
-        return sum(self.phases[phase].duration_seconds for phase in self.phase_sequence)
+        return (
+            sum(self.phases[phase].duration_seconds for phase in self.phase_sequence)
+            + self.protocol.post_trial_seconds
+        )
 
     @property
     def projected_duration_seconds(self) -> float:
@@ -381,6 +383,7 @@ class ResolvedExperiment:
     device: DeviceProfile
     device_path: Path
     assets: dict[str, dict[str, Path]]
+    presentation_assets: dict[str, Path]
 
     @property
     def output_root(self) -> Path:

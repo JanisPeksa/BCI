@@ -89,6 +89,14 @@ The bundled schema-2 configurations live under
 configurations with a targeted migration error. `validate-session` continues
 to reconstruct historical schema-1 packages.
 
+`cyton-four-phoneme.yaml` is the short hardware and protocol shakedown for the
+8-channel Cyton. It presents `/p/`, `/m/`, `/i/`, and `/u/` twice each across
+two balanced blocks. Each trial follows FIXATION (1 s), STIMULUS (5 s),
+FIXATION (1 s), THINKING (5 s), FIXATION (1 s), SPEAKING (5 s), REST (5 s),
+and a blank post-trial interval
+(1 s). The speaking phase displays the bundled mouth cue. Audio plays only
+during STIMULUS; the other trial stages are silent.
+
 `simulate` defaults to a deterministic virtual clock and exercises the same
 presentation contract with a virtual driver. `run-subject` starts a backend
 and PsychoPy without Qt, creates one session from its CLI arguments, and starts

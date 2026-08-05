@@ -9,21 +9,29 @@ RESOURCE_ROOT = Path(__file__).parents[2] / "src" / "imagined_speech" / "resourc
 
 
 def test_plan_is_deterministic_and_matches_projected_duration() -> None:
-    resolved = load_experiment(RESOURCE_ROOT / "configs" / "imagined_only.yaml")
+    resolved = load_experiment(
+        RESOURCE_ROOT / "configs" / "cyton-four-phoneme.yaml"
+    )
 
     first = compile_session_plan(resolved.config)
     second = compile_session_plan(resolved.config)
 
     assert first == second
-    assert first.experiment_trial_count == 160
+    assert first.experiment_trial_count == 8
     assert first.practice_trial_count == 4
     assert first.total_duration_seconds == resolved.config.projected_duration_seconds
-    assert sum(isinstance(item, BreakPlan) for item in first.items) == 3
+    first_trial = first.blocks[0].trials[0]
+    assert len({phase.step_id for phase in first_trial.phases}) == len(
+        first_trial.phases
+    )
+    assert sum(isinstance(item, BreakPlan) for item in first.items) == 1
     assert sum(isinstance(item, RestPlan) for item in first.items) == 2
 
 
 def test_seed_changes_order_without_changing_balance() -> None:
-    resolved = load_experiment(RESOURCE_ROOT / "configs" / "imagined_only.yaml")
+    resolved = load_experiment(
+        RESOURCE_ROOT / "configs" / "cyton-four-phoneme.yaml"
+    )
     original = compile_session_plan(resolved.config)
     changed_config = resolved.config.model_copy(
         update={"random_seed": resolved.config.random_seed + 1}
@@ -42,14 +50,20 @@ def test_seed_changes_order_without_changing_balance() -> None:
     ]
     assert original_order != changed_order
     assert Counter(original_order) == Counter(changed_order)
-    assert set(Counter(original_order).values()) == {10}
+    assert set(Counter(original_order).values()) == {2}
 
 
 def test_stimuli_are_evenly_distributed_across_blocks() -> None:
-    resolved = load_experiment(RESOURCE_ROOT / "configs" / "feis_comparable.yaml")
+    resolved = load_experiment(RESOURCE_ROOT / "configs" / "cyton-four-phoneme.yaml")
     plan = compile_session_plan(resolved.config)
 
-    assert [len(block.trials) for block in plan.experiment_blocks] == [40, 40, 40, 40]
+    assert [len(block.trials) for block in plan.experiment_blocks] == [4, 4]
+    assert all(
+        trial.post_trial_seconds == 1
+        for block in plan.blocks
+        for trial in block.trials
+    )
+    assert plan.total_duration_seconds == resolved.config.projected_duration_seconds
     for stimulus in resolved.config.stimuli:
         block_counts = [
             sum(trial.stimulus_id == stimulus.id for trial in block.trials)

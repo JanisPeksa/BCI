@@ -167,6 +167,6 @@ reads and raw disk writes remain off that thread.
 - Event fan-out is synchronous. Expensive future consumers must use their own
   queues so they cannot delay engine transitions.
 - The engine is not a general arbitrary workflow interpreter; it executes the
-  two validated protocol profiles and compiled plan item types.
+  configured phase sequence and compiled plan item types.
 - Multimedia load/playback errors are not yet emitted as structured health
   events.
