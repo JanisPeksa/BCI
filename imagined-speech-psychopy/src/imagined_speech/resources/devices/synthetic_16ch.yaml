@@ -1,0 +1,28 @@
+# Device profiles retain schema version 1.
+schema_version: 1
+profile_id: cyton_16ch_synthetic
+backend: synthetic
+board_id: -1
+sampling_rate_hz: 125
+eeg_channels:
+  - {board_channel: 0, label: Fp1, position: Fp1}
+  - {board_channel: 1, label: Fp2, position: Fp2}
+  - {board_channel: 2, label: C3, position: C3}
+  - {board_channel: 3, label: C4, position: C4}
+  - {board_channel: 4, label: P7, position: P7}
+  - {board_channel: 5, label: P8, position: P8}
+  - {board_channel: 6, label: O1, position: O1}
+  - {board_channel: 7, label: O2, position: O2}
+  - {board_channel: 8, label: F7, position: F7}
+  - {board_channel: 9, label: F8, position: F8}
+  - {board_channel: 10, label: F3, position: F3}
+  - {board_channel: 11, label: F4, position: F4}
+  - {board_channel: 12, label: T7, position: T7}
+  - {board_channel: 13, label: T8, position: T8}
+  - {board_channel: 14, label: P3, position: P3}
+  - {board_channel: 15, label: P4, position: P4}
+reference: Synthetic linked ear-clip reference
+ground: Synthetic Cyton BIAS
+connection: {}
+pre_roll_seconds: 1
+post_roll_seconds: 1

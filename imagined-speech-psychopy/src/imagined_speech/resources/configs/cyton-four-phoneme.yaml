@@ -3,7 +3,7 @@ experiment_id: cyton_four_phoneme
 title: Cyton Four-Phoneme Heard-Imagined-Spoken Session
 profile: heard_imagined_spoken
 random_seed: 20260805
-device_profile: ../devices/cyton.yaml
+device_profile: ../devices/cyton_8ch.yaml
 protocol:
   sequence: [fixation, stimulus, fixation, thinking, fixation, speaking, rest]
   experiment:

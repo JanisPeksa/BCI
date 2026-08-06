@@ -114,20 +114,63 @@ def test_previous_position_is_rejected_with_psychopy_migration_guidance() -> Non
 
 
 @pytest.mark.parametrize(
-    ("name", "backend"),
+    ("name", "backend", "channel_count"),
     [
-        ("synthetic.yaml", "synthetic"),
-        ("brainflow_synthetic.yaml", "brainflow_synthetic"),
-        ("replay.yaml", "replay"),
-        ("cyton.yaml", "cyton"),
-        ("lsl.yaml", "lsl"),
+        ("synthetic.yaml", "synthetic", 8),
+        ("synthetic_16ch.yaml", "synthetic", 16),
+        ("brainflow_synthetic.yaml", "brainflow_synthetic", 8),
+        ("replay.yaml", "replay", 8),
+        ("cyton_8ch.yaml", "cyton", 8),
+        ("cyton_16ch.yaml", "cyton", 16),
+        ("lsl.yaml", "lsl", 8),
     ],
 )
-def test_device_profiles_validate(name: str, backend: str) -> None:
+def test_device_profiles_validate(
+    name: str, backend: str, channel_count: int
+) -> None:
     profile = load_device_profile(RESOURCE_ROOT / "devices" / name)
 
     assert profile.backend == backend
-    assert len(profile.eeg_channels) == 8
+    assert len(profile.eeg_channels) == channel_count
+
+
+def test_openbci_helmet_profiles_use_standard_channel_layouts() -> None:
+    cyton_8ch = load_device_profile(RESOURCE_ROOT / "devices" / "cyton_8ch.yaml")
+    cyton_16ch = load_device_profile(RESOURCE_ROOT / "devices" / "cyton_16ch.yaml")
+
+    assert cyton_8ch.board_id == 0
+    assert cyton_8ch.sampling_rate_hz == 250
+    assert [channel.position for channel in cyton_8ch.eeg_channels] == [
+        "Fp1",
+        "Fp2",
+        "C3",
+        "C4",
+        "P7",
+        "P8",
+        "O1",
+        "O2",
+    ]
+
+    assert cyton_16ch.board_id == 2
+    assert cyton_16ch.sampling_rate_hz == 125
+    assert [channel.position for channel in cyton_16ch.eeg_channels] == [
+        "Fp1",
+        "Fp2",
+        "C3",
+        "C4",
+        "P7",
+        "P8",
+        "O1",
+        "O2",
+        "F7",
+        "F8",
+        "F3",
+        "F4",
+        "T7",
+        "T8",
+        "P3",
+        "P4",
+    ]
 
 
 def test_protocol_sequence_is_configured_and_allows_repeated_phases(
