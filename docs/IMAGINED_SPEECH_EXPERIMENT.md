@@ -142,6 +142,8 @@ participant-specific task.
 
 # Running the four-phoneme experiment
 
+> Introduction to the helmet + important tips for the operation of the helmet: [LINK](https://drive.google.com/file/d/1C7fjaKmNK-WvdIHksHm9JWzIPXmYcgSW/view?usp=drive_link)
+
 This section describes how to run the four-phoneme experiment end to end. It
 assumes the scripts have been successfully installed and the virtual
 environment `imagined-speech-psychopy/.venv` is ready with all dependencies

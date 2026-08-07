@@ -5,6 +5,11 @@ interface (BCI) research. It supports controlled EEG data collection,
 imagined-speech experiments, steady-state visual evoked potential (SSVEP)
 experiments, and validation of stimulus timing and display frequencies.
 
+## Video tutorials
+
+- Introduction to the helmet + important tips for the operation of the helmet: [LINK](https://drive.google.com/file/d/1C7fjaKmNK-WvdIHksHm9JWzIPXmYcgSW/view?usp=drive_link)
+- Running four phonome experiment live on a video: [LINK](https://drive.google.com/file/d/1CoksXDZ_rzcgFaDU7lEx_8lfJUg__RWg/view?usp=drive_link)
+
 ## Projects
 
 - [imagined-speech-psychopy](imagined-speech-psychopy/) — EEG recording and
