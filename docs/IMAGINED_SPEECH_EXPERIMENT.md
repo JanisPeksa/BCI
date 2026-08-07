@@ -211,6 +211,18 @@ display:
 
 ![Experimenter protocol-control screen](images/experimenter_view.png)
 
+### Practice trials
+
+After you've initialized UI you'll go through one round of practice trials to get familiar with experiment's flow, these trials will not be recorded. After you've done practice you'll see screen:
+
+![Practice end screen](images/practice_end.png)
+
+### The experiment's flow
+
+To start the experiment after practice you'll need to click 'Start experiment' button:
+
+![Start experiment button](images/start_experiment.png)
+
 The subject display shows only the presentation content:
 
 ![Subject fixation screen](images/sim_view.png)
