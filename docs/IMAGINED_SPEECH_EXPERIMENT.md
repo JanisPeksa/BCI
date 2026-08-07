@@ -201,7 +201,7 @@ recording begins:
   confirming that the stimulus audio plays on the subject display.
 - The validated preview shows the compiled protocol, its projected duration,
   and any setup warnings. Resolve warnings before creating the session.
-- if you have dual monitors setup, choose the screen where test subject should look in `Subject display override`, and choose window mode in `Subject window override` among FULL_SCREEN, CENTER or TOP_LEFT options
+- If you have dual monitors setup, choose the screen where test subject should look in `Subject display override`, and choose window mode in `Subject window override` among FULL_SCREEN, CENTER or TOP_LEFT options
 
 Press **Create session** to move to the protocol-control scene.
 
@@ -212,6 +212,12 @@ and progress state. Press **Init subject UI** to launch the PsychoPy subject
 display:
 
 ![Experimenter protocol-control screen](images/experimenter_view.png)
+
+Once the subject UI connects and timing preflight passes, the primary action
+becomes **Start protocol**. The practice stage (one block of `/p/`, `/m/`,
+`/i/`, and `/u/`) runs first; when it finishes, the primary action becomes
+**Start experiment**, which the operator presses to begin the experiment stage
+(two blocks, two repetitions per stimulus).
 
 ### Practice trials
 
@@ -247,12 +253,6 @@ speaking -> rest:
 ![Subject speaking screen](images/sim_view_out_loud.png)
 
 5. **Rest** — rest before the next trial.
-
-Once the subject UI connects and timing preflight passes, the primary action
-becomes **Start protocol**. The practice stage (one block of `/p/`, `/m/`,
-`/i/`, and `/u/`) runs first; when it finishes, the primary action becomes
-**Start experiment**, which the operator presses to begin the experiment stage
-(two blocks, two repetitions per stimulus).
 
 ## Monitoring
 
