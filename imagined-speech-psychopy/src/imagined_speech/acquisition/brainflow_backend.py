@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from imagined_speech.acquisition.base import AcquisitionError, SampleBatch
-from imagined_speech.config import DeviceProfile
+from imagined_speech.config import SD_RECORDING_FIRMWARE_COMMANDS, DeviceProfile
 
 
 class BrainFlowAcquisitionBackend:
@@ -112,11 +112,31 @@ class BrainFlowAcquisitionBackend:
                     channel.board_channel for channel in self.profile.eeg_channels
                 ],
             }
+            self._configure_sd_recording()
         except Exception as exc:
             self.close()
             if isinstance(exc, AcquisitionError):
                 raise
             raise AcquisitionError(f"BrainFlow prepare failed: {exc}") from exc
+
+    def _configure_sd_recording(self) -> None:
+        sd = self.profile.sd_card_recording
+        if not sd.enabled:
+            return
+        command = SD_RECORDING_FIRMWARE_COMMANDS[sd.duration]
+        try:
+            self._board.config_board(command)
+        except Exception as exc:
+            raise AcquisitionError(
+                "SD card recording could not be started: the Cyton firmware "
+                "rejected the SD recording command. Check that an SD card is "
+                f"inserted and formatted, then retry. ({exc})"
+            ) from exc
+        self._metadata["sd_card_recording"] = {
+            "enabled": True,
+            "duration": sd.duration.value,
+            "firmware_command": command,
+        }
 
     def start(self) -> None:
         if self._board is None:

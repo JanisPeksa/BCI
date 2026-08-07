@@ -43,6 +43,36 @@ class SubjectPresentationStyle(StrEnum):
     MINIMAL_PHONEME = "minimal_phoneme"
 
 
+class SDRecordingLength(StrEnum):
+    TEST_14_SECONDS = "test_14_seconds"
+    FIVE_MINUTES = "5_minutes"
+    FIFTEEN_MINUTES = "15_minutes"
+    THIRTY_MINUTES = "30_minutes"
+    ONE_HOUR = "1_hour"
+    TWO_HOURS = "2_hours"
+    FOUR_HOURS = "4_hours"
+    TWELVE_HOURS = "12_hours"
+    TWENTY_FOUR_HOURS = "24_hours"
+
+
+SD_RECORDING_FIRMWARE_COMMANDS: dict[SDRecordingLength, str] = {
+    SDRecordingLength.TEST_14_SECONDS: "a",
+    SDRecordingLength.FIVE_MINUTES: "A",
+    SDRecordingLength.FIFTEEN_MINUTES: "S",
+    SDRecordingLength.THIRTY_MINUTES: "F",
+    SDRecordingLength.ONE_HOUR: "G",
+    SDRecordingLength.TWO_HOURS: "H",
+    SDRecordingLength.FOUR_HOURS: "J",
+    SDRecordingLength.TWELVE_HOURS: "K",
+    SDRecordingLength.TWENTY_FOUR_HOURS: "L",
+}
+
+
+class SDCardRecordingConfig(StrictModel):
+    enabled: bool = False
+    duration: SDRecordingLength = SDRecordingLength.FIVE_MINUTES
+
+
 class StimulusConfig(StrictModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     label: str = Field(min_length=1)
@@ -96,6 +126,13 @@ class AudioConfig(StrictModel):
     enabled: bool = False
     volume: float = Field(default=0.8, ge=0, le=1)
     require_all_stimuli: bool = False
+    device: str | int | None = Field(
+        default=None,
+        description=(
+            "Audio output device for the PTB backend, as a device index or "
+            "name; None selects the system default output"
+        ),
+    )
 
 
 class TextStyleConfig(StrictModel):
@@ -377,6 +414,7 @@ class DeviceProfile(StrictModel):
     connection: dict[str, str | int | float | bool | None] = {}
     pre_roll_seconds: float = Field(default=1.0, ge=0)
     post_roll_seconds: float = Field(default=1.0, ge=0)
+    sd_card_recording: SDCardRecordingConfig = SDCardRecordingConfig()
 
     @model_validator(mode="after")
     def validate_channels(self) -> "DeviceProfile":
@@ -392,6 +430,13 @@ class DeviceProfile(StrictModel):
             self.connection.get("stream_name") or self.connection.get("stream_type")
         ):
             raise ValueError("LSL device profile requires stream_name or stream_type")
+        if self.sd_card_recording.enabled and not (
+            self.backend == "cyton" and self.board_id == 2
+        ):
+            raise ValueError(
+                "SD card recording is only supported on the Cyton+Daisy "
+                "16-channel device (backend 'cyton', board_id 2)"
+            )
         return self
 
 

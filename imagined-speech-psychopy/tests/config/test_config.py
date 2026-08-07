@@ -65,6 +65,22 @@ def test_cyton_four_phoneme_profile_is_short_and_uses_five_repeat_audio() -> Non
             assert recording.getnframes() == 5 * 44_100
 
 
+def test_audio_device_specifier_round_trips(tmp_path: Path) -> None:
+    for device in ("pulse", 6):
+        data = load_experiment(default_config_path()).config.model_dump(mode="json")
+        data["device_profile"] = str(
+            (RESOURCE_ROOT / "devices" / "synthetic.yaml").resolve()
+        )
+        data["presentation"]["audio"]["enabled"] = True
+        data["presentation"]["audio"]["device"] = device
+        path = tmp_path / "device.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+        resolved = load_experiment(path)
+
+        assert resolved.config.presentation.audio.device == device
+
+
 def test_smoke_profile_is_hardware_and_asset_independent() -> None:
     resolved = load_experiment(default_config_path())
 

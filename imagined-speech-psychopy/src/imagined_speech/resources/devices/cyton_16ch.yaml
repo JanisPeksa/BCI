@@ -27,3 +27,6 @@ connection:
   serial_port: null
 pre_roll_seconds: 1
 post_roll_seconds: 1
+sd_card_recording:
+  enabled: false
+  duration: 5_minutes

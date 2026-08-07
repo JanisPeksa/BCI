@@ -166,6 +166,7 @@ def run_subject_process(host: str, port: int) -> int:
                             presentation["audio"]["enabled"],
                             presentation["audio"]["volume"],
                             presentation["psychopy"]["audio_latency_mode"],
+                            presentation["audio"].get("device"),
                         )
                         audio.preload(assets)
                         result = run_preflight(window, presentation["psychopy"])

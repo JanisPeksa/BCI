@@ -81,7 +81,7 @@ ground. The reference and BIAS connections are not counted as active EEG channel
 The hardware supports two electrode configurations:
 
 | Configuration             | Active EEG positions in this project                             | Acquisition rate                       | Availability during the experiment            |
-|---------------------------|------------------------------------------------------------------|----------------------------------------|-----------------------------------------------|
+| ------------------------- | ---------------------------------------------------------------- | -------------------------------------- | --------------------------------------------- |
 | Cyton, 8-channel          | Fp1, Fp2, C3, C4, P7, P8, O1, O2                                 | 250 Hz                                 | Available to the application as a live stream |
 | Cyton + Daisy, 16-channel | Fp1, Fp2, C3, C4, P7, P8, O1, O2, F7, F8, F3, F4, T7, T8, P3, P4 | 125 Hz over the normal wireless stream | Available live at 125 Hz                      |
 
@@ -137,3 +137,133 @@ placement in our headset, to prove that a carefully selected 8-electrode montage
 in theory retain enough task-relevant spatial information for a later online
 validation/classification system, especially for a restricted,
 participant-specific task.
+
+---
+
+# Running the four-phoneme experiment
+
+This section describes how to run the four-phoneme experiment end to end. It
+assumes the scripts have been successfully installed and the virtual
+environment `imagined-speech-psychopy/.venv` is ready with all dependencies
+installed, as described in the
+[project README](../imagined-speech-psychopy/README.md).
+
+## Recording configuration
+
+For data collection we record with the **16-channel Cyton + Daisy
+configuration**, using the device profile
+[`cyton_16ch.yaml`](../imagined-speech-psychopy/src/imagined_speech/resources/devices/cyton_16ch.yaml).
+The application receives the 16 channels as a live stream at 125 Hz. In
+addition, we record offline data to the micro SD card inserted in the Cyton:
+the card stores all 16 channels at 250 Hz and is retrieved and processed after
+the session. See [Hardware setup](#hardware-setup) for the acquisition-rate
+details and the synchronization requirements.
+
+Before the session, make sure the micro SD card is inserted and formatted.
+
+## Launching the application
+
+Activate the virtual environment and start the operator workflow:
+
+```powershell
+# Windows
+.\.venv\Scripts\Activate.ps1
+
+# Linux/macOS
+source .venv/bin/activate
+```
+
+```powershell
+imagined-speech-psychopy run
+```
+
+The operator console opens on the session setup screen; the subject display is
+started later from the operator UI.
+
+## Configuring the session
+
+The setup screen is where the experiment is configured and validated before any
+recording begins:
+
+![Experimenter session setup screen](images/configuration_screen.png)
+
+- Check that the protocol configuration points to `cyton-four-phoneme.yaml`
+  and that the device profile points to `cyton_8ch.yaml` or `cyton_16ch.yaml` depending on how your headwear configured right now, we configured Cyton for 16 channels, so we chose `cyton_16ch.yaml`
+  recording. If you want to turn sd card recording of the session on, you can go to device configuration and enable it.
+- Enter the participant ID and a session label; both are used in the session
+  package name.
+- Leave the random seed as configured (or change it deliberately), confirm the
+  output directory, and adjust the subject display and window mode if the
+  defaults are not suitable.
+- Verify the montage summary and tick "Audio output and volume checked" after
+  confirming that the stimulus audio plays on the subject display.
+- The validated preview shows the compiled protocol, its projected duration,
+  and any setup warnings. Resolve warnings before creating the session.
+- if you have dual monitors setup, choose the screen where test subject should look in `Subject display override`, and choose window mode in `Subject window override` among FULL_SCREEN, CENTER or TOP_LEFT options
+
+Press **Create session** to move to the protocol-control scene.
+
+## Running the protocol
+
+The protocol-control screen shows session, runtime, recording, protocol, phase,
+and progress state. Press **Init subject UI** to launch the PsychoPy subject
+display:
+
+![Experimenter protocol-control screen](images/experimenter_view.png)
+
+The subject display shows only the presentation content:
+
+![Subject fixation screen](images/sim_view.png)
+
+The four-phoneme protocol uses a practice stage followed by the experiment
+stage. Each trial runs the sequence fixation -> stimulus -> thinking ->
+speaking -> rest:
+
+1. **Fixation** — the participant fixates on the cross;
+2. **Stimulus** — the participant listens to the phoneme audio repeated five
+   times;
+3. **Thinking** — the participant imagines repeating the phoneme five times
+   without moving;
+
+![Subject thinking screen](images/sim_view_thinking_screen.png)
+
+4. **Speaking** — the participant speaks the phoneme five times at the same
+   rhythm;
+
+![Subject speaking screen](images/sim_view_out_loud.png)
+
+5. **Rest** — rest before the next trial.
+
+Once the subject UI connects and timing preflight passes, the primary action
+becomes **Start protocol**. The practice stage (one block of `/p/`, `/m/`,
+`/i/`, and `/u/`) runs first; when it finishes, the primary action becomes
+**Start experiment**, which the operator presses to begin the experiment stage
+(two blocks, two repetitions per stimulus).
+
+## Monitoring
+
+While the protocol runs, the monitoring workspace shows live EEG traces,
+channel reception, recent protocol markers, the operator command audit, and
+acquisition/storage health. Watch for dropped samples or timing warnings, and
+use the available controls (pause/resume, repeat trial, repeat block,
+electrode-adjustment note, abort) as needed. Monitoring never modifies the
+recorded data:
+
+![Experimenter monitoring during the session](images/experimenter_view_active.png)
+
+## Completing the session
+
+When the protocol completes (or is aborted), the session is finalized and
+validated. The completion screen shows the output path and offers
+session-summary export and a return to setup for the next session:
+
+![Finalized session screen](images/session_end.png)
+
+Verify the saved package afterwards with:
+
+```powershell
+imagined-speech-psychopy validate-session <path-to-session-folder>
+```
+
+Remember to also stop and retrieve the Cyton SD-card recording, and to
+synchronize it with the experiment markers for offline analysis.

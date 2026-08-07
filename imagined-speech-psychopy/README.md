@@ -7,18 +7,20 @@ console, live monitoring, timing safeguards, and validated session packages.
 
 ## Table of contents
 
-- [Introduction](#introduction)
-- [Installation](#installation)
-- [Launch options](#launch-options)
-- [Operator features](#operator-features)
-  - [Session setup](#session-setup)
-  - [Protocol control](#protocol-control)
-  - [Live monitoring](#live-monitoring)
-  - [Session completion](#session-completion)
-- [Application components and architecture](#application-components-and-architecture)
-  - [Communication flow](#communication-flow)
-  - [Recording lifecycle](#recording-lifecycle)
-- [Experiment and data model](#experiment-and-data-model)
+- [Imagined Speech EEG recorder](#imagined-speech-eeg-recorder)
+  - [Table of contents](#table-of-contents)
+  - [Introduction](#introduction)
+  - [Installation](#installation)
+  - [Launch options](#launch-options)
+  - [Operator features](#operator-features)
+    - [Session setup](#session-setup)
+    - [Protocol control](#protocol-control)
+    - [Live monitoring](#live-monitoring)
+    - [Session completion](#session-completion)
+  - [Application components and architecture](#application-components-and-architecture)
+    - [Communication flow](#communication-flow)
+    - [Recording lifecycle](#recording-lifecycle)
+  - [Experiment and data model](#experiment-and-data-model)
 
 ## Introduction
 
@@ -43,26 +45,38 @@ The supported environment is 64-bit Windows with Python 3.11. The package
 requires Python `>=3.11,<3.12`, and the PsychoPy subject dependency is pinned
 to `psychopy==2026.2.1`.
 
-From the project directory:
+First set up virtual enviroment for project and then run:
 
 ```powershell
-python -m pip install -e .
+cd imagined-speech-psychopy
+python -m .venv
+
+#Windows: CMD
+.venv\Scripts\activate
+
+#Windows: PowerShell
+.\.venv\Scripts\Activate.ps1
+
+#Linux and MacOS
+source .venv/bin/activate
+
+pip install -e .
 ```
 
 Install the application surfaces as needed:
 
 ```powershell
 # Operator UI
-python -m pip install -e ".[ui]"
+pip install -e ".[ui]"
 
 # PsychoPy subject UI
-python -m pip install -e ".[subject]"
+pip install -e ".[subject]"
 
 # BrainFlow, NumPy/SciPy, and LSL acquisition
-python -m pip install -e ".[acquisition]"
+pip install -e ".[acquisition]"
 
 # Everything, including development dependencies
-python -m pip install -e ".[all,dev]"
+pip install -e ".[all,dev]"
 ```
 
 The base installation supports configuration, planning, validation, and
@@ -73,15 +87,15 @@ installed through their optional dependencies.
 
 The installed command is `imagined-speech-psychopy`:
 
-| Command | Purpose |
-|---|---|
-| `validate` | Validate an experiment YAML file and its referenced resources. |
-| `preview` | Show the protocol layout, balance, and projected duration. |
-| `simulate` | Run a session and write a package without a live subject UI. |
-| `run` | Launch the operator workflow and the PsychoPy subject display. |
-| `run-subject` | Launch a backend and subject process directly from CLI arguments. |
-| `validate-session <path>` | Validate and reconstruct a saved session package. |
-| `publish-lsl-synthetic` | Publish a real-time synthetic EEG stream over LSL. |
+| Command                   | Purpose                                                           |
+| ------------------------- | ----------------------------------------------------------------- |
+| `validate`                | Validate an experiment YAML file and its referenced resources.    |
+| `preview`                 | Show the protocol layout, balance, and projected duration.        |
+| `simulate`                | Run a session and write a package without a live subject UI.      |
+| `run`                     | Launch the operator workflow and the PsychoPy subject display.    |
+| `run-subject`             | Launch a backend and subject process directly from CLI arguments. |
+| `validate-session <path>` | Validate and reconstruct a saved session package.                 |
+| `publish-lsl-synthetic`   | Publish a real-time synthetic EEG stream over LSL.                |
 
 The simplest option is to use `run` and do everything through the operator UI:
 
