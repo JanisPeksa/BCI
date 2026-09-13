@@ -208,17 +208,17 @@ def test_six_square_profile_balances_target_and_renders_all_frequencies() -> Non
     }
 
     assert plan == compile_session_plan(resolved.config)
-    assert plan.trial_count == 72
+    assert plan.trial_count == 48
     assert Counter(
         step.target_position_id for step in stimulus_steps
-    ) == Counter({position_id: 12 for position_id in position_ids})
-    for start in range(0, 72, 6):
+    ) == Counter({position_id: 8 for position_id in position_ids})
+    for start in range(0, 48, 6):
         assert {
             step.target_position_id
             for step in stimulus_steps[start : start + 6]
         } == position_ids
     assert all(
-        step.stimulus_id == "freq-13-75"
+        step.stimulus_id == "freq-10-75"
         and step.position_stimulus_ids is not None
         and set(step.position_stimulus_ids) == expected_stimuli
         for step in stimulus_steps
@@ -245,11 +245,11 @@ def test_six_square_profile_balances_target_and_renders_all_frequencies() -> Non
     event = next(
         item for item in sink.events if item.event_type == EventType.TRIAL_STARTED
     )
-    assert event.payload["target_frequency_hz"] == 13.75
+    assert event.payload["target_frequency_hz"] == 10.75
     assert set(event.payload["distractor_frequencies_hz"]) == {
         8.75,
         9.75,
-        10.75,
         11.75,
         12.75,
+        13.75,
     }
